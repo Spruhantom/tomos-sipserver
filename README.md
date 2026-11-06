@@ -2,135 +2,78 @@
 
 A self-hosted home telephone system for Debian 13, built around Asterisk with a web administration panel and an integrated browser softphone.
 
-> Status: planning / foundation. This repository currently contains the project specification and scaffolding plan; do not describe the PBX as production-ready until the implementation and integration tests are complete.
+## Current status
 
-## Goals
+The first Debian 13 foundation is now committed: an Asterisk installer, generated PJSIP endpoints 100/101, a basic internal dialplan, a systemd health-check unit and GitHub Actions tests. The web interface, WebRTC client, Cisco SCCP and Yealink provisioning are future stages and are not implemented yet.
 
-- Run on Debian 13 (amd64 initially).
-- Provide SIP calling through Asterisk PJSIP.
-- Provide Cisco SCCP support through a separately packaged and tested SCCP channel driver (evaluate AI3I/chan-sccp compatibility against the selected Asterisk release).
-- Provision supported Yealink SIP phones over authenticated HTTPS.
-- Provision compatible Cisco SCCP phones using model-appropriate provisioning (typically TFTP/HTTP, depending on model and firmware).
-- Create and manage extensions from the web interface.
-- Provide an integrated browser SIP client using SIP.js and WebRTC.
-- Keep the management interface and telephony services private to the LAN/VPN by default.
-- Support optional SIP trunk connectivity without requiring it for internal calls.
+## Install (Debian 13 only)
 
-## Planned stack
+Clone this repository on a clean Debian 13 host, then run:
+
+```bash
+sudo ./install.sh
+```
+
+The installer:
+- Checks for Debian 13 and root privileges.
+- Installs Debian's Asterisk package and required utilities.
+- Backs up existing `/etc/asterisk/pjsip.conf` and `extensions.conf` before replacing them with the initial TomOS configuration. **Do not run on an existing PBX without reviewing the backup/restore implications.**
+- Creates extensions 100 and 101 with cryptographically random passwords.
+- Stores the initial credentials in `/root/tomos-sip-credentials.txt` (mode 0600).
+- Enables Asterisk and a TomOS systemd health-check unit.
+- Verifies that Asterisk starts and both endpoints are loaded.
+
+The initial setup listens on UDP 5060 and uses the Asterisk RTP range UDP 10000-20000. Keep this on a trusted home LAN or VPN. The installer does not configure router port forwarding or expose SIP to the public internet. It does not configure a SIP trunk, TLS, WebRTC, a firewall or external telephone-number service.
+
+Extensions can call one another by dialling 100 or 101. Dial `*65` for the Asterisk echo test (where the demo audio prompt is installed).
+
+## Planned technology
 
 | Layer | Technology |
 |---|---|
 | OS | Debian 13 |
-| PBX engine | Asterisk (pin and test a supported release) |
+| PBX engine | Asterisk |
 | SIP | PJSIP |
-| Cisco SCCP | chan-sccp, built against the selected Asterisk ABI |
-| API | Python 3 / FastAPI |
+| Cisco SCCP | chan-sccp, separately built and compatibility-tested |
+| API | Python / FastAPI |
 | Web UI | React / TypeScript |
-| Browser calling | SIP.js, WebRTC, secure WebSocket signalling |
-| Database | SQLite for initial single-home-server deployment |
+| Browser calling | SIP.js, WebRTC and secure WebSockets |
+| Initial database | SQLite |
 | Reverse proxy | Nginx |
-| Remote access | WireGuard VPN (optional; not an internet-exposed SIP listener) |
+| Remote access | WireGuard VPN (optional) |
 | Service supervision | systemd |
-
-Asterisk manages the call engine. The API is the control plane and must not expose AMI/ARI directly to browsers or untrusted networks. Use a narrow local service adapter with least-privilege credentials.
-
-## Target architecture
-
-- Browser -> HTTPS -> Nginx -> FastAPI.
-- Browser softphone -> WSS/SIP.js -> Asterisk PJSIP WebRTC endpoint; media uses WebRTC/SRTP.
-- SIP phones -> PJSIP -> shared Asterisk dialplan.
-- Cisco SCCP phones -> chan-sccp -> shared Asterisk dialplan.
-- API -> validated provisioning templates and controlled Asterisk configuration/reload operations.
-- Yealink devices -> authenticated HTTPS provisioning.
-- Cisco device provisioning -> per-model template and documented protocol/firmware requirements.
-- SQLite stores users, extension metadata, device inventory, call metadata and provisioning audit events. Secrets must be hashed/encrypted as appropriate and never logged.
 
 ## Planned features
 
-### PBX
-- Internal extension-to-extension calling.
-- PJSIP registrations and endpoint authentication.
-- Optional SIP trunk configuration, incoming/outgoing routes and explicit outbound permissions.
-- Voicemail, forwarding, DND, ring groups, call pickup, transfers and conferences.
-- Call detail records and configurable retention.
-- Optional call recording disabled by default; provide consent, retention and deletion controls.
+- Web administration dashboard and permanent integrated webphone.
+- Extension creation, editing, credential rotation and device assignment.
+- Cisco SCCP phone support and model-specific provisioning.
+- Yealink HTTPS provisioning.
+- Voicemail, call history, forwarding, DND, ring groups, transfers and conferences.
+- Optional SIP trunk connectivity for external calls.
+- Backups, restore, upgrades and monitoring.
 
-### Extensions
-- Create, edit, disable, delete and bulk-create extensions.
-- Allocate unique extension numbers and validate collisions.
-- Generate high-entropy credentials; show secrets only once and support rotation.
-- Assign one or more devices and a supported protocol.
-- Apply permissions, voicemail and forwarding settings.
-- Provisioning must be transactional: validate desired state, back up current configuration, apply, validate/reload, and roll back on failure.
-- Never interpolate untrusted values directly into Asterisk config or shell commands.
-
-### Device provisioning
-- Device discovery is advisory only; require an administrator to approve and bind a MAC address before provisioning.
-- Yealink model profiles, account settings, time/NTP, programmable keys, BLF and firmware metadata.
-- Cisco SCCP model profiles, MAC binding, line assignment and compatible provisioning files.
-- Firmware is not redistributed by this project. Users supply firmware they are entitled to use.
-- Use per-device tokens or equivalent authentication, HTTPS where supported, and LAN/VPN access controls.
-- Validate MAC address, model and template schema; audit configuration downloads and administrative changes.
-
-### Web softphone
-- Permanent telephone entry in the dashboard navigation.
-- SIP.js registration against a dedicated PJSIP WebRTC endpoint.
-- Incoming/outgoing calls, answer/reject, mute, hold, transfer, contacts and call history.
-- Persistent compact active-call panel while navigating dashboard pages.
-- Desktop notifications only after permission; microphone selection and browser permissions.
-- Require HTTPS and secure signalling/media. Browser sessions must be revocable.
-- Do not store plaintext SIP passwords in localStorage; use short-lived session-bound credentials or a secure provisioning flow.
-
-## Network and security defaults
+## Security principles
 
 - No public SIP, AMI, ARI, TFTP or admin-panel exposure by default.
-- Admin UI bound to LAN/VPN behind HTTPS; initial setup must create an administrator securely.
-- Firewall allowlist for necessary LAN/VPN ports; document SIP/RTP/WebRTC port ranges.
-- Strong per-extension credentials, rate limiting, audit logs, least privilege and automatic backup.
-- No default credentials or universal sample secrets.
-- WireGuard is the recommended remote-access path.
-- SIP trunk outbound routes and premium-rate/international calling are disabled until explicitly configured.
-- Emergency calling is not guaranteed by a private PBX; document provider requirements and provide an independent means of reaching emergency services.
-- Call recording is off by default and must have configurable consent/retention controls.
-
-## Repository layout (target)
-
-```text
-backend/                 FastAPI, auth, extension and device APIs
-frontend/                React dashboard and integrated webphone
-asterisk/                PJSIP, dialplan and WebRTC templates
-sccp/                    chan-sccp build/integration metadata
-provisioning/            Yealink and Cisco model templates
-installer/               Debian 13 install, upgrade and uninstall
-packaging/               Debian package/systemd/Nginx definitions
-docs/                    Architecture, operations, security and device guides
-tests/                   Unit, integration and hardware-compatibility tests
-.github/workflows/       CI workflows
-```
+- Strong, unique extension credentials; no default passwords.
+- Keep administration on the LAN/VPN and use HTTPS when the web UI is introduced.
+- Never expose AMI/ARI directly to browsers or untrusted networks.
+- Call recording disabled by default, with consent and retention controls if added.
+- A private PBX does not guarantee emergency calling; verify any provider's emergency-call support and keep an independent means of calling emergency services.
 
 ## Development roadmap
 
-1. **Foundation:** Debian 13 dependency checks, pinned Asterisk build/install strategy, systemd units, secure first-run setup, packaging and CI.
-2. **PBX core:** PJSIP endpoints, dialplan, extension lifecycle, internal call tests and configuration rollback.
-3. **Administration API/UI:** authentication, dashboard, extension/device management and audit trail.
-4. **Provisioning:** Yealink HTTPS provisioning; Cisco SCCP driver build and model-specific provisioning; validate against actual supported phone models.
-5. **Browser phone:** dedicated WebRTC endpoint, SIP.js, WSS, SRTP, persistent call controls and browser integration tests.
-6. **Home features:** voicemail, call history, groups, forwarding, DND, backups and restore tests.
-7. **Hardening/release:** security review, Debian 13 clean-install tests, upgrade/rollback tests, documented supported hardware matrix and release process.
+1. **Foundation (current):** Debian 13 installer, Asterisk, PJSIP, internal extensions, systemd health check and CI.
+2. PBX core: safe extension lifecycle, configuration validation and rollback.
+3. Administration API/UI: authentication, dashboard, extension/device management and audit trail.
+4. Provisioning: Yealink HTTPS profiles and Cisco SCCP model-specific provisioning.
+5. Browser phone: SIP.js, WSS, SRTP and persistent in-dashboard call controls.
+6. Home features: voicemail, call history, groups, forwarding, DND, backups and restore.
+7. Hardening/release: security review, hardware compatibility matrix and upgrade testing.
 
-## Minimum acceptance criteria
+## Tests
 
-- Clean Debian 13 installation completes without interactive package-manager surprises.
-- A generated extension can register from a test SIP client and place a two-way-audio internal call.
-- Invalid extension/device inputs cannot alter generated configuration.
-- A failed configuration apply restores the last known good configuration.
-- Yealink provisioning is verified against named models and firmware versions.
-- SCCP is only declared supported after the selected chan-sccp/Asterisk combination builds and registers named Cisco models.
-- Browser softphone can register, call, receive calls and pass two-way audio over HTTPS/WSS/WebRTC.
-- AMI/ARI and management endpoints are not reachable from untrusted networks.
-- Backup/restore and upgrade/rollback have automated tests.
-- CI reports actual test outcomes; documentation distinguishes mocked tests from real hardware tests.
+GitHub Actions runs Python renderer tests, Bash syntax/ShellCheck checks, and a Debian 13 job that installs Asterisk, renders the test configuration, starts Asterisk in the foreground and queries PJSIP endpoints and the internal dialplan.
 
-## Development status
-
-No PBX implementation has been completed merely by adding this specification. The repository should grow incrementally with tested code and CI evidence. Model-specific Cisco and Yealink compatibility must be reported explicitly rather than assumed.
+Hardware tests are still required before claiming a specific Cisco or Yealink model is supported.
