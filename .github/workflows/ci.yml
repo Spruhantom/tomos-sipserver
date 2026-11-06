@@ -92,10 +92,13 @@ jobs:
         run: |
           set -Eeuo pipefail
           useradd --system --create-home --home-dir /var/lib/tomos-sipserver --shell /usr/sbin/nologin tomos
-          usermod --append --groups tomos asterisk
+          groupadd --system tomos-cdr
+          usermod --append --groups tomos-cdr asterisk
+          usermod --append --groups tomos-cdr tomos
           install -d -o tomos -g tomos -m 0700 /var/lib/tomos-sipserver
+          chgrp tomos-cdr /var/lib/tomos-sipserver
           chmod 0710 /var/lib/tomos-sipserver
-          install -d -o root -g tomos -m 2770 /var/lib/tomos-sipserver/cdr
+          install -d -o root -g tomos-cdr -m 2770 /var/lib/tomos-sipserver/cdr
           install -d -o root -g root -m 0755 /opt/tomos-sipserver/app
           cp -a tomos_sipserver /opt/tomos-sipserver/app/
           install -m 0644 scripts/render-config.py /opt/tomos-sipserver/app/render-config.py
