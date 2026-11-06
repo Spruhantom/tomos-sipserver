@@ -38,24 +38,35 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential wget curl ca-certificates pkg-config python3 openssl \
+            build-essential bison flex libtool-bin git wget curl ca-certificates pkg-config python3 openssl \
             libxml2-dev libncurses-dev uuid-dev libsqlite3-dev libssl-dev libedit-dev \
-            libjansson-dev libcurl4-openssl-dev libnewt-dev libspandsp-dev libsrtp2-dev
-      - name: Download and build pinned Asterisk 22 LTS
+            libjansson-dev libcurl4-openssl-dev libnewt-dev libspandsp-dev libsrtp2-dev \
+            libspeexdsp-dev libopus-dev libogg-dev libvorbis-dev libasound2-dev
+      - name: Download and verify pinned Asterisk source
         run: |
           VERSION=22.12.0
           URL="https://downloads.asterisk.org/pub/telephony/asterisk/asterisk-${VERSION}.tar.gz"
           curl --fail --location --retry 3 "$URL" --output /tmp/asterisk.tar.gz
           curl --fail --location "$URL.sha256" --output /tmp/asterisk.sha256
           EXPECTED="$(awk 'NR==1 {print $1}' /tmp/asterisk.sha256)"
+          test "${#EXPECTED}" -eq 64
           printf '%s  %s\n' "$EXPECTED" /tmp/asterisk.tar.gz | sha256sum --check
           mkdir -p /usr/src/tomos
           tar -xzf /tmp/asterisk.tar.gz -C /usr/src/tomos
-          cd "/usr/src/tomos/asterisk-${VERSION}"
-          ./contrib/scripts/install_prereq install
-          ./configure --with-pjproject-bundled --with-jansson-bundled
+      - name: Install Asterisk-specific prerequisites
+        working-directory: /usr/src/tomos/asterisk-22.12.0
+        run: ./contrib/scripts/install_prereq install
+      - name: Configure Asterisk
+        working-directory: /usr/src/tomos/asterisk-22.12.0
+        run: ./configure --with-pjproject-bundled --with-jansson-bundled
+      - name: Build Asterisk
+        working-directory: /usr/src/tomos/asterisk-22.12.0
+        run: |
           make menuselect.makeopts
           make -j2
+      - name: Install Asterisk
+        working-directory: /usr/src/tomos/asterisk-22.12.0
+        run: |
           make install
           make samples
       - name: Configure TomOS test extensions
