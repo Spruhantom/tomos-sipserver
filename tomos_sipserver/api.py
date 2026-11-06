@@ -210,7 +210,16 @@ def create_app(
 
     @app.get("/api/v1/dashboard/status", dependencies=[Depends(require_token)], tags=["dashboard"])
     def dashboard_status():
-        return get_status()
+        payload = get_status()
+        contacts = payload.get("registered_contacts", []) if isinstance(payload, dict) else []
+        safe = []
+        if isinstance(contacts, list):
+            for item in contacts:
+                if isinstance(item, dict) and re.fullmatch(EXTENSION_PATTERN, str(item.get("extension", ""))):
+                    safe.append({"extension": str(item["extension"]), "status": str(item.get("status", "Unknown"))[:24]})
+        return {"status": "online" if isinstance(payload, dict) and payload.get("status") == "online" else "offline",
+                "uptime": str(payload.get("uptime") or "")[:160] or None if isinstance(payload, dict) else None,
+                "registered_contacts": safe, "registered_count": len(safe)}
 
     @app.get("/api/v1/extensions", response_model=list[ExtensionView], dependencies=[Depends(require_token)])
     def list_extensions():
