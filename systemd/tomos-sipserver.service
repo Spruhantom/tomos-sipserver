@@ -1,0 +1,14 @@
+[Unit]
+Description=TomOS Home SIP Server health check
+Documentation=https://github.com/Spruhantom/tomos-sipserver
+Requires=asterisk.service
+After=asterisk.service
+PartOf=asterisk.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/tomos-sipserver-check
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

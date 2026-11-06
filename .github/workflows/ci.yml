@@ -1,0 +1,73 @@
+name: Debian 13 foundation CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-and-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+      - name: Check shell syntax
+        run: |
+          bash -n install.sh installer/install.sh scripts/tomos-sipserver-check
+          shellcheck install.sh installer/install.sh scripts/tomos-sipserver-check
+      - name: Run Python tests
+        run: python -m unittest discover -s tests -v
+
+  debian-13-asterisk:
+    runs-on: ubuntu-latest
+    container:
+      image: debian:13
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Debian 13 Asterisk
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends asterisk python3 bash ca-certificates
+      - name: Render test PBX configuration
+        run: |
+          mkdir -p /tmp/tomos-asterisk
+          python3 scripts/render-config.py --output-dir /tmp/tomos-asterisk \
+            --extension "100:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+            --extension "101:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      - name: Validate Asterisk configuration and load modules
+        run: |
+          mkdir -p /tmp/tomos-asterisk/astetc /tmp/tomos-asterisk/astvarlib/spool \
+                   /tmp/tomos-asterisk/astlog /tmp/tomos-asterisk/astrun
+          cp /tmp/tomos-asterisk/pjsip.conf /tmp/tomos-asterisk/astetc/pjsip.conf
+          cp /tmp/tomos-asterisk/extensions.conf /tmp/tomos-asterisk/astetc/extensions.conf
+          cat > /tmp/tomos-asterisk/astetc/asterisk.conf <<'EOF'
+          [directories]
+          astetcdir => /tmp/tomos-asterisk/astetc
+          astvarlibdir => /tmp/tomos-asterisk/astvarlib
+          astlogdir => /tmp/tomos-asterisk/astlog
+          astrundir => /tmp/tomos-asterisk/astrun
+          astspooldir => /tmp/tomos-asterisk/astvarlib/spool
+          [options]
+          verbose = 0
+          nocolor = yes
+          EOF
+          asterisk -C /tmp/tomos-asterisk/astetc/asterisk.conf -f -U root -G root &
+          ASTERISK_PID=$!
+          cleanup() { kill "$ASTERISK_PID" 2>/dev/null || true; }
+          trap cleanup EXIT
+          for attempt in $(seq 1 20); do
+            asterisk -C /tmp/tomos-asterisk/astetc/asterisk.conf -rx 'core show version' >/dev/null 2>&1 && break
+            sleep 1
+          done
+          asterisk -C /tmp/tomos-asterisk/astetc/asterisk.conf -rx 'pjsip show endpoints'
+          asterisk -C /tmp/tomos-asterisk/astetc/asterisk.conf -rx 'dialplan show tomos-internal'
