@@ -80,6 +80,8 @@ jobs:
           install -m 0644 asterisk/modules.conf /etc/asterisk/modules.conf
           install -m 0644 asterisk/logger.conf /etc/asterisk/logger.conf
           install -m 0644 asterisk/rtp.conf /etc/asterisk/rtp.conf
+          install -m 0644 asterisk/cdr.conf /etc/asterisk/cdr.conf
+          install -m 0644 asterisk/cdr_sqlite3_custom.conf /etc/asterisk/cdr_sqlite3_custom.conf
           python3 scripts/render-config.py --output-dir /etc/asterisk \
             --extension "100:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
             --extension "101:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -90,7 +92,9 @@ jobs:
         run: |
           set -Eeuo pipefail
           useradd --system --create-home --home-dir /var/lib/tomos-sipserver --shell /usr/sbin/nologin tomos
+          usermod --append --groups tomos asterisk
           install -d -o tomos -g tomos -m 0700 /var/lib/tomos-sipserver
+          install -d -o root -g tomos -m 2770 /var/lib/tomos-sipserver/cdr
           install -d -o root -g root -m 0755 /opt/tomos-sipserver/app
           cp -a tomos_sipserver /opt/tomos-sipserver/app/
           install -m 0644 scripts/render-config.py /opt/tomos-sipserver/app/render-config.py
@@ -109,7 +113,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          asterisk -f -U asterisk -G asterisk &
+          runuser -u asterisk -- asterisk -f &
           ASTERISK_PID=$!
           cleanup() {
             asterisk -rx 'core stop now' >/dev/null 2>&1 || kill "$ASTERISK_PID" 2>/dev/null || true
@@ -125,6 +129,14 @@ jobs:
             exit 1
           fi
           ENDPOINTS="$(asterisk -rx 'pjsip show endpoints')"
+          asterisk -rx 'cdr show status'
+          grep -Fq 'cdr_sqlite3_custom.so' <<<"$(asterisk -rx 'module show like cdr_sqlite3_custom')"
+          test -f /var/lib/tomos-sipserver/cdr/cdr.db
+          python3 - <<'PY'
+          import sqlite3
+          db = sqlite3.connect("file:/var/lib/tomos-sipserver/cdr/cdr.db?mode=ro", uri=True)
+          assert db.execute("SELECT COUNT(*) FROM cdr").fetchone()[0] == 0
+          PY
           printf '%s\n' "$ENDPOINTS"
           grep -Fq '100/100' <<<"$ENDPOINTS"
           grep -Fq '101/101' <<<"$ENDPOINTS"
@@ -151,6 +163,8 @@ jobs:
           curl --fail --silent http://127.0.0.1:8000/health >/dev/null
           DASH_STATUS="$(curl --fail --silent --show-error http://127.0.0.1:8000/api/v1/dashboard/status -H "Authorization: Bearer $API_TOKEN")"
           grep -Fq '"status":"online"' <<<"$DASH_STATUS"
+          CALL_HISTORY="$(curl --fail --silent --show-error http://127.0.0.1:8000/api/v1/calls -H "Authorization: Bearer $API_TOKEN")"
+          grep -Fq '"total":0' <<<"$CALL_HISTORY"
           AUTH_HEADER="Authorization: Bearer $API_TOKEN"
           CREATED="$(curl --fail --silent --show-error -X POST http://127.0.0.1:8000/api/v1/extensions \
             -H "$AUTH_HEADER" -H 'Content-Type: application/json' \

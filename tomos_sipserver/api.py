@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -99,6 +99,37 @@ def _asterisk_status() -> dict:
         return {"status":"offline","uptime":None,"registered_contacts":[],"registered_count":0}
 
 
+def _read_call_history(path: Path, limit: int, offset: int) -> dict:
+    """Read CDR rows from Asterisk's separate SQLite database without write access."""
+    if not path.is_file():
+        return {"calls": [], "total": 0, "limit": limit, "offset": offset}
+    uri = path.resolve().as_uri() + "?mode=ro"
+    try:
+        with closing(sqlite3.connect(uri, uri=True, timeout=5)) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA query_only = ON")
+            total = connection.execute("SELECT COUNT(*) FROM cdr").fetchone()[0]
+            rows = connection.execute(
+                "SELECT calldate, clid, src, dst, duration, billsec, disposition "
+                "FROM cdr ORDER BY calldate DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+        calls = []
+        for row in rows:
+            calls.append({
+                "started_at": str(row["calldate"] or "")[:40],
+                "caller_id": str(row["clid"] or "")[:128],
+                "source": str(row["src"] or "")[:64],
+                "destination": str(row["dst"] or "")[:64],
+                "duration_seconds": max(0, int(float(row["duration"] or 0))),
+                "billable_seconds": max(0, int(float(row["billsec"] or 0))),
+                "disposition": str(row["disposition"] or "UNKNOWN")[:24].upper(),
+            })
+        return {"calls": calls, "total": total, "limit": limit, "offset": offset}
+    except (sqlite3.Error, ValueError, TypeError) as error:
+        raise HTTPException(status_code=503, detail="Call history is temporarily unavailable") from error
+
+
 def create_app(
     database_path: str | Path | None = None,
     api_token: str | None = None,
@@ -106,6 +137,7 @@ def create_app(
     admin_password: str | None = None,
     static_dir: str | Path | None = None,
     status_callback: Callable[[], dict] | None = None,
+    cdr_database_path: str | Path | None = None,
 ) -> FastAPI:
     db_path = Path(database_path or os.environ.get("TOMOS_DB_PATH", str(DEFAULT_DB)))
     token = api_token if api_token is not None else os.environ.get("TOMOS_API_TOKEN", "")
@@ -114,6 +146,7 @@ def create_app(
     initialize_database(db_path)
     apply = apply_callback or _apply_config
     get_status = status_callback or _asterisk_status
+    cdr_path = Path(cdr_database_path or os.environ.get("TOMOS_CDR_DB_PATH", "/var/lib/tomos-sipserver/cdr/cdr.db"))
     admin_secret = admin_password if admin_password is not None else os.environ.get("TOMOS_ADMIN_PASSWORD", "")
     if len(admin_secret) < 24:
         raise RuntimeError("TOMOS_ADMIN_PASSWORD must be configured with at least 24 characters")
@@ -220,6 +253,10 @@ def create_app(
         return {"status": "online" if isinstance(payload, dict) and payload.get("status") == "online" else "offline",
                 "uptime": str(payload.get("uptime") or "")[:160] or None if isinstance(payload, dict) else None,
                 "registered_contacts": safe, "registered_count": len(safe)}
+
+    @app.get("/api/v1/calls", dependencies=[Depends(require_token)], tags=["call history"])
+    def call_history(limit: int = Query(default=50, ge=1, le=100), offset: int = Query(default=0, ge=0, le=100000)):
+        return _read_call_history(cdr_path, limit, offset)
 
     @app.get("/api/v1/extensions", response_model=list[ExtensionView], dependencies=[Depends(require_token)])
     def list_extensions():

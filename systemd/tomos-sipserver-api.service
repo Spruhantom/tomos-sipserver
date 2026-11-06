@@ -12,6 +12,7 @@ Group=tomos
 WorkingDirectory=/opt/tomos-sipserver/app
 EnvironmentFile=/etc/tomos-sipserver/api.env
 Environment=TOMOS_DB_PATH=/var/lib/tomos-sipserver/extensions.db
+Environment=TOMOS_CDR_DB_PATH=/var/lib/tomos-sipserver/cdr/cdr.db
 ExecStart=/opt/tomos-sipserver/venv/bin/uvicorn tomos_sipserver.api:create_app --factory --host 127.0.0.1 --port 8000 --workers 1
 Restart=on-failure
 RestartSec=5

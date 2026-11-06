@@ -10,7 +10,7 @@ die() { printf '[TomOS SIP] ERROR: %s\n' "$*" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
-for required in scripts/render-config.py scripts/tomos-sipserver-check scripts/tomos-sipserver-apply-config tomos_sipserver/api.py tomos_sipserver/db.py dashboard/index.html dashboard/app.js dashboard/style.css requirements.txt systemd/asterisk.service systemd/tomos-sipserver.service systemd/tomos-sipserver-api.service sudoers/tomos-sipserver-api asterisk/asterisk.conf asterisk/modules.conf asterisk/logger.conf asterisk/rtp.conf; do
+for required in scripts/render-config.py scripts/tomos-sipserver-check scripts/tomos-sipserver-apply-config tomos_sipserver/api.py tomos_sipserver/db.py dashboard/index.html dashboard/app.js dashboard/style.css requirements.txt systemd/asterisk.service systemd/tomos-sipserver.service systemd/tomos-sipserver-api.service sudoers/tomos-sipserver-api asterisk/asterisk.conf asterisk/modules.conf asterisk/logger.conf asterisk/rtp.conf asterisk/cdr.conf asterisk/cdr_sqlite3_custom.conf; do
   [[ -f "$REPO_ROOT/$required" ]] || die "Missing project file: $required (use a complete repository checkout)."
 done
 
@@ -52,7 +52,7 @@ make install
 install -d -m 0750 /etc/asterisk/tomos-backups
 BACKUP_DIR="/etc/asterisk/tomos-backups/$(date -u +%Y%m%dT%H%M%SZ)"
 install -d -m 0750 "$BACKUP_DIR"
-for name in asterisk.conf modules.conf logger.conf rtp.conf pjsip.conf extensions.conf; do
+for name in asterisk.conf modules.conf logger.conf rtp.conf cdr.conf cdr_sqlite3_custom.conf pjsip.conf extensions.conf; do
   if [[ -f "/etc/asterisk/$name" ]]; then cp -a "/etc/asterisk/$name" "$BACKUP_DIR/$name"; fi
 done
 log "Existing Asterisk configuration backed up to $BACKUP_DIR."
@@ -73,6 +73,8 @@ if ! id tomos >/dev/null 2>&1; then
   useradd --system --home-dir /var/lib/tomos-sipserver --create-home --shell /usr/sbin/nologin tomos
 fi
 install -d -o tomos -g tomos -m 0700 /var/lib/tomos-sipserver
+usermod --append --groups tomos asterisk
+install -d -o root -g tomos -m 2770 /var/lib/tomos-sipserver/cdr
 install -d -o root -g root -m 0755 /opt/tomos-sipserver/app
 rm -rf /opt/tomos-sipserver/app/tomos_sipserver
 cp -a "$REPO_ROOT/tomos_sipserver" /opt/tomos-sipserver/app/
@@ -113,6 +115,8 @@ install -m 0644 "$REPO_ROOT/asterisk/asterisk.conf" /etc/asterisk/asterisk.conf
 install -m 0644 "$REPO_ROOT/asterisk/modules.conf" /etc/asterisk/modules.conf
 install -m 0644 "$REPO_ROOT/asterisk/logger.conf" /etc/asterisk/logger.conf
 install -m 0644 "$REPO_ROOT/asterisk/rtp.conf" /etc/asterisk/rtp.conf
+install -m 0644 "$REPO_ROOT/asterisk/cdr.conf" /etc/asterisk/cdr.conf
+install -m 0644 "$REPO_ROOT/asterisk/cdr_sqlite3_custom.conf" /etc/asterisk/cdr_sqlite3_custom.conf
 PYTHONPATH=/opt/tomos-sipserver/app /opt/tomos-sipserver/venv/bin/python -m tomos_sipserver.apply_config --no-reload
 chown root:asterisk /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
 chmod 0640 /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
@@ -146,7 +150,7 @@ umask 077
 } > "$CREDENTIAL_FILE"
 chmod 0600 "$CREDENTIAL_FILE"
 
-log "Installation completed. Asterisk ${ASTERISK_VERSION} and the extension API are running."
+log "Installation completed. Asterisk ${ASTERISK_VERSION}, extension API and call history are running."
 log "Initial SIP credentials saved to $CREDENTIAL_FILE (root-only)."
 log "API bearer token saved to /root/tomos-sip-api-token.txt (root-only)."
 log "Dashboard password saved to /root/tomos-sip-dashboard-password.txt (root-only); open http://127.0.0.1:8000/ on the server or use a trusted HTTPS reverse proxy."

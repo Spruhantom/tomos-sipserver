@@ -8,6 +8,8 @@ After=network-online.target
 Type=simple
 User=asterisk
 Group=asterisk
+SupplementaryGroups=tomos
+UMask=0007
 RuntimeDirectory=asterisk
 RuntimeDirectoryMode=0755
 ExecStart=/usr/sbin/asterisk -f -U asterisk -G asterisk
@@ -20,7 +22,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=/etc/asterisk /var/lib/asterisk /var/log/asterisk /var/spool/asterisk /run/asterisk
+ReadWritePaths=/etc/asterisk /var/lib/asterisk /var/lib/tomos-sipserver/cdr /var/log/asterisk /var/spool/asterisk /run/asterisk
 
 [Install]
 WantedBy=multi-user.target
