@@ -306,7 +306,7 @@ def create_app(
         limit: int = Query(default=50, ge=1, le=100),
         offset: int = Query(default=0, ge=0, le=100000),
         start_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
-        start_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+        end_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
         number: str | None = Query(default=None, max_length=64),
         disposition: str | None = Query(default=None, max_length=24),
     ):
@@ -317,7 +317,7 @@ def create_app(
     @app.get("/api/v1/calls/export.csv", dependencies=[Depends(require_token)], tags=["call history"])
     def export_call_history(
         start_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
-        start_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+        end_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
         number: str | None = Query(default=None, max_length=64),
         disposition: str | None = Query(default=None, max_length=24),
     ):
