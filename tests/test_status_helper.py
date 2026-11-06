@@ -11,6 +11,6 @@ Contact:  invalid/sip:invalid@192.168.1.22  0f00abcf  Avail        2.000
 """
         self.assertEqual(MODULE["parse_contacts"](output), [{"extension":"100","status":"Avail"},{"extension":"101","status":"Unavail"}])
     def test_empty_contact_list(self):
-        self.assertEqual(MODULE.parse_contacts("No objects found.\n"), [])
+        self.assertEqual(MODULE["parse_contacts"]("No objects found.\n"), [])
 if __name__ == "__main__":
     unittest.main()
