@@ -1,7 +1,9 @@
 """Authenticated FastAPI extension-management API for TomOS SIP Server."""
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import hmac
 import os
 import re
@@ -99,20 +101,44 @@ def _asterisk_status() -> dict:
         return {"status":"offline","uptime":None,"registered_contacts":[],"registered_count":0}
 
 
-def _read_call_history(path: Path, limit: int, offset: int) -> dict:
-    """Read CDR rows from Asterisk's separate SQLite database without write access."""
+def _call_filter_sql(start_date: str | None, end_date: str | None, number: str | None, disposition: str | None):
+    clauses = []
+    values = []
+    if start_date:
+        clauses.append("calldate >= ?")
+        values.append(start_date)
+    if end_date:
+        from datetime import date, timedelta
+        clauses.append("calldate < ?")
+        values.append((date.fromisoformat(end_date) + timedelta(days=1)).isoformat())
+    if number:
+        escaped = number.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        clauses.append("(src LIKE ? ESCAPE '\\\\' OR dst LIKE ? ESCAPE '\\\\' OR clid LIKE ? ESCAPE '\\\\')")
+        pattern = f"%{escaped}%"
+        values.extend([pattern, pattern, pattern])
+    if disposition:
+        clauses.append("UPPER(disposition) = ?")
+        values.append(disposition)
+    return (" WHERE " + " AND ".join(clauses) if clauses else ""), values
+
+
+def _read_call_history(path: Path, limit: int, offset: int, start_date: str | None = None,
+                       end_date: str | None = None, number: str | None = None,
+                       disposition: str | None = None) -> dict:
+    """Read filtered CDR rows from Asterisk's separate SQLite database without write access."""
     if not path.is_file():
         return {"calls": [], "total": 0, "limit": limit, "offset": offset}
+    where, values = _call_filter_sql(start_date, end_date, number, disposition)
     uri = path.resolve().as_uri() + "?mode=ro"
     try:
         with closing(sqlite3.connect(uri, uri=True, timeout=5)) as connection:
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA query_only = ON")
-            total = connection.execute("SELECT COUNT(*) FROM cdr").fetchone()[0]
+            total = connection.execute("SELECT COUNT(*) FROM cdr" + where, values).fetchone()[0]
             rows = connection.execute(
-                "SELECT calldate, clid, src, dst, duration, billsec, disposition "
-                "FROM cdr ORDER BY calldate DESC LIMIT ? OFFSET ?",
-                (limit, offset),
+                "SELECT calldate, clid, src, dst, duration, billsec, disposition FROM cdr" +
+                where + " ORDER BY calldate DESC LIMIT ? OFFSET ?",
+                [*values, limit, offset],
             ).fetchall()
         calls = []
         for row in rows:
@@ -128,6 +154,11 @@ def _read_call_history(path: Path, limit: int, offset: int) -> dict:
         return {"calls": calls, "total": total, "limit": limit, "offset": offset}
     except (sqlite3.Error, ValueError, TypeError) as error:
         raise HTTPException(status_code=503, detail="Call history is temporarily unavailable") from error
+
+
+def _csv_safe(value: object) -> str:
+    text = str(value if value is not None else "")
+    return "'" + text if text.startswith(("=", "+", "-", "@", "\t", "\r")) else text
 
 
 def create_app(
@@ -254,9 +285,56 @@ def create_app(
                 "uptime": str(payload.get("uptime") or "")[:160] or None if isinstance(payload, dict) else None,
                 "registered_contacts": safe, "registered_count": len(safe)}
 
+    def call_filters(start_date: str | None, end_date: str | None, number: str | None, disposition: str | None):
+        from datetime import date
+        for label, value in (("start_date", start_date), ("end_date", end_date)):
+            if value:
+                try:
+                    date.fromisoformat(value)
+                except ValueError as error:
+                    raise HTTPException(status_code=422, detail=f"{label} must be a real YYYY-MM-DD date") from error
+        if start_date and end_date and start_date > end_date:
+            raise HTTPException(status_code=422, detail="start_date must not be after end_date")
+        if number is not None and not number.strip():
+            raise HTTPException(status_code=422, detail="number filter cannot be blank")
+        if disposition and disposition not in {"ANSWERED", "NO ANSWER", "BUSY", "FAILED"}:
+            raise HTTPException(status_code=422, detail="Unsupported call disposition")
+        return number.strip() if number else None
+
     @app.get("/api/v1/calls", dependencies=[Depends(require_token)], tags=["call history"])
-    def call_history(limit: int = Query(default=50, ge=1, le=100), offset: int = Query(default=0, ge=0, le=100000)):
-        return _read_call_history(cdr_path, limit, offset)
+    def call_history(
+        limit: int = Query(default=50, ge=1, le=100),
+        offset: int = Query(default=0, ge=0, le=100000),
+        start_date: str | None = Query(default=None, pattern=r"^\\d{4}-\\d{2}-\\d{2}$"),
+        end_date: str | None = Query(default=None, pattern=r"^\\d{4}-\\d{2}-\\d{2}$"),
+        number: str | None = Query(default=None, max_length=64),
+        disposition: str | None = Query(default=None, max_length=24),
+    ):
+        number_filter = call_filters(start_date, end_date, number, disposition.upper() if disposition else None)
+        return _read_call_history(cdr_path, limit, offset, start_date, end_date, number_filter,
+                                  disposition.upper() if disposition else None)
+
+    @app.get("/api/v1/calls/export.csv", dependencies=[Depends(require_token)], tags=["call history"])
+    def export_call_history(
+        start_date: str | None = Query(default=None, pattern=r"^\\d{4}-\\d{2}-\\d{2}$"),
+        end_date: str | None = Query(default=None, pattern=r"^\\d{4}-\\d{2}-\\d{2}$"),
+        number: str | None = Query(default=None, max_length=64),
+        disposition: str | None = Query(default=None, max_length=24),
+    ):
+        number_filter = call_filters(start_date, end_date, number, disposition.upper() if disposition else None)
+        result = _read_call_history(cdr_path, 5000, 0, start_date, end_date, number_filter,
+                                    disposition.upper() if disposition else None)
+        if result["total"] > 5000:
+            raise HTTPException(status_code=413, detail="Narrow the filters to export no more than 5,000 call records")
+        output = io.StringIO(newline="")
+        writer = csv.writer(output)
+        writer.writerow(["Started at", "Caller ID", "Source", "Destination", "Duration seconds", "Billable seconds", "Disposition"])
+        for call in result["calls"]:
+            writer.writerow([_csv_safe(call[key]) for key in (
+                "started_at", "caller_id", "source", "destination", "duration_seconds",
+                "billable_seconds", "disposition")])
+        return Response(content=output.getvalue(), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": 'attachment; filename="tomos-call-history.csv"'})
 
     @app.get("/api/v1/extensions", response_model=list[ExtensionView], dependencies=[Depends(require_token)])
     def list_extensions():

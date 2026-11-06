@@ -49,6 +49,28 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/v1/calls?limit=101", headers=self.headers).status_code, 422)
         self.assertEqual(self.client.get("/api/v1/calls?offset=-1", headers=self.headers).status_code, 422)
 
+    def test_call_history_filters_by_date_number_and_disposition(self):
+        response = self.client.get("/api/v1/calls?start_date=2026-11-06&end_date=2026-11-06&number=101&disposition=answered", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["total"], 1)
+        self.assertEqual(response.json()["calls"][0]["destination"], "101")
+
+    def test_call_history_rejects_invalid_date_range_and_disposition(self):
+        self.assertEqual(self.client.get("/api/v1/calls?start_date=2026-02-30", headers=self.headers).status_code, 422)
+        self.assertEqual(self.client.get("/api/v1/calls?start_date=2026-11-07&end_date=2026-11-06", headers=self.headers).status_code, 422)
+        self.assertEqual(self.client.get("/api/v1/calls?disposition=anything", headers=self.headers).status_code, 422)
+
+    def test_call_history_csv_export_is_authenticated_and_formula_safe(self):
+        self.assertEqual(self.client.get("/api/v1/calls/export.csv").status_code, 401)
+        import sqlite3
+        with sqlite3.connect(self.cdr_db) as cdr:
+            cdr.execute("UPDATE cdr SET clid = ? WHERE src = '100'", ("=HYPERLINK(\"https://bad.example\")",))
+        response = self.client.get("/api/v1/calls/export.csv?number=100", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/csv", response.headers["content-type"])
+        self.assertIn("'=HYPERLINK", response.text)
+        self.assertIn("attachment;", response.headers["content-disposition"])
+
     def test_call_history_returns_empty_when_cdr_database_not_created(self):
         token = "empty-cdr-token-" + "x" * 40
         client = TestClient(create_app(self.db, token, lambda: None,

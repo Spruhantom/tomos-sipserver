@@ -44,7 +44,8 @@ The dashboard is served at `http://127.0.0.1:8000/`. Sign in using the one-time 
 - `POST /api/v1/extensions/{extension}/password` — rotate the SIP password and return it once.
 - `POST /api/v1/extensions/{extension}/enable` and `/disable` — enable or disable registration.
 - `DELETE /api/v1/extensions/{extension}` — delete an extension.
-- `GET /api/v1/calls?limit=50&offset=0` — read recent call-detail records (maximum 100 per page).
+- `GET /api/v1/calls?limit=50&offset=0&start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&number=100&disposition=ANSWERED` — read filtered call-detail records (maximum 100 per page). Date bounds are inclusive; number matches caller ID, source or destination.
+- `GET /api/v1/calls/export.csv` — export matching call history as CSV (maximum 5,000 records per export). Spreadsheet formula-leading values are neutralised.
 
 Each mutation regenerates PJSIP and dialplan configuration and requests an Asterisk reload. If configuration application fails, the API restores the previous database state and returns an error. The API runs as the unprivileged `tomos` user; a fixed-purpose root helper is allowed through one sudoers command only.
 
@@ -76,7 +77,7 @@ Each mutation regenerates PJSIP and dialplan configuration and requests an Aster
 
 1. **Foundation (passed CI):** Debian 13 source-build installer, Asterisk, PJSIP, internal extensions, systemd and CI.
 2. **Extension API (current):** authenticated FastAPI CRUD, SQLite persistence, password rotation, enable/disable and configuration rollback.
-3. **Dashboard (initial release):** password login, session/CSRF protection, extension listing, create, enable/disable, delete and one-time password reset display. Device registration and call history are now included.
+3. **Dashboard (initial release):** password login, session/CSRF protection, extension listing, create, enable/disable, delete and one-time password reset display. Device registration and searchable call history, date/number/result filters and CSV export are now included.
 4. Provisioning: Yealink HTTPS profiles and Cisco SCCP model-specific provisioning.
 5. Browser phone: SIP.js, WSS, SRTP and persistent in-dashboard call controls.
 6. Home features: voicemail, call history, groups, forwarding, DND, backups and restore.
