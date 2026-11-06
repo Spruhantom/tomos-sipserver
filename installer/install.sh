@@ -73,6 +73,7 @@ if ! id tomos >/dev/null 2>&1; then
   useradd --system --home-dir /var/lib/tomos-sipserver --create-home --shell /usr/sbin/nologin tomos
 fi
 install -d -o tomos -g tomos -m 0700 /var/lib/tomos-sipserver
+chmod 0710 /var/lib/tomos-sipserver
 usermod --append --groups tomos asterisk
 install -d -o root -g tomos -m 2770 /var/lib/tomos-sipserver/cdr
 install -d -o root -g root -m 0755 /opt/tomos-sipserver/app
