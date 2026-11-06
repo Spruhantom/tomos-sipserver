@@ -83,7 +83,7 @@ python3 -m venv /opt/tomos-sipserver/venv
 
 EXT100_SECRET="$(openssl rand -hex 24)"
 EXT101_SECRET="$(openssl rand -hex 24)"
-/opt/tomos-sipserver/venv/bin/python -m tomos_sipserver.db --database /var/lib/tomos-sipserver/extensions.db \
+PYTHONPATH=/opt/tomos-sipserver/app /opt/tomos-sipserver/venv/bin/python -m tomos_sipserver.db --database /var/lib/tomos-sipserver/extensions.db \
   --seed-extension "100:$EXT100_SECRET" --seed-extension "101:$EXT101_SECRET"
 # Keep existing credentials on upgrades so the database and active SIP config stay aligned.
 EXT100_SECRET="$(/opt/tomos-sipserver/venv/bin/python -c "import sqlite3; print(sqlite3.connect('/var/lib/tomos-sipserver/extensions.db').execute('SELECT password FROM extensions WHERE extension=?', ('100',)).fetchone()[0])")"
