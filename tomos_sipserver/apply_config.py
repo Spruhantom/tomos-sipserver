@@ -32,7 +32,7 @@ def cli(command: str) -> None:
         raise RuntimeError(f"Asterisk command failed ({command}): {output[-1000:]}")
 
 
-def apply() -> None:
+def apply(reload_asterisk: bool = True) -> None:
     if os.geteuid() != 0:
         raise PermissionError("Configuration helper must run as root")
     with closing(sqlite3.connect(DB_PATH)) as connection:
@@ -49,8 +49,9 @@ def apply() -> None:
         for path in paths:
             os.chown(path, 0, asterisk_gid)
             os.chmod(path, 0o640)
-        cli("pjsip reload")
-        cli("dialplan reload")
+        if reload_asterisk:
+            cli("pjsip reload")
+            cli("dialplan reload")
     except Exception:
         for path in paths:
             old = previous[path]
@@ -60,17 +61,22 @@ def apply() -> None:
                 renderer.atomic_write(path, old.decode("utf-8"))
                 os.chown(path, 0, asterisk_gid)
                 os.chmod(path, previous_modes[path])
-        try:
-            cli("pjsip reload")
-            cli("dialplan reload")
-        except Exception:
-            pass
+        if reload_asterisk:
+            try:
+                cli("pjsip reload")
+                cli("dialplan reload")
+            except Exception:
+                pass
         raise
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--no-reload", action="store_true", help="Render config without contacting a running Asterisk service")
+    args = parser.parse_args()
     try:
-        apply()
+        apply(reload_asterisk=not args.no_reload)
     except Exception as error:
         print(f"TomOS config apply failed: {error}", file=sys.stderr)
         raise SystemExit(1)

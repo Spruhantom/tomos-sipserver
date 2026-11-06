@@ -107,8 +107,7 @@ install -m 0644 "$REPO_ROOT/asterisk/asterisk.conf" /etc/asterisk/asterisk.conf
 install -m 0644 "$REPO_ROOT/asterisk/modules.conf" /etc/asterisk/modules.conf
 install -m 0644 "$REPO_ROOT/asterisk/logger.conf" /etc/asterisk/logger.conf
 install -m 0644 "$REPO_ROOT/asterisk/rtp.conf" /etc/asterisk/rtp.conf
-python3 "$REPO_ROOT/scripts/render-config.py" --output-dir /etc/asterisk \
-  --extension "100:$EXT100_SECRET" --extension "101:$EXT101_SECRET"
+PYTHONPATH=/opt/tomos-sipserver/app /opt/tomos-sipserver/venv/bin/python -m tomos_sipserver.apply_config --no-reload
 chown root:asterisk /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
 chmod 0640 /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
 chown -R asterisk:asterisk /var/lib/asterisk /var/log/asterisk /var/spool/asterisk
