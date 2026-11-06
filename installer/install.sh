@@ -10,7 +10,7 @@ die() { printf '[TomOS SIP] ERROR: %s\n' "$*" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
-for required in scripts/render-config.py scripts/tomos-sipserver-check scripts/tomos-sipserver-apply-config tomos_sipserver/api.py tomos_sipserver/db.py requirements.txt systemd/asterisk.service systemd/tomos-sipserver.service systemd/tomos-sipserver-api.service sudoers/tomos-sipserver-api asterisk/asterisk.conf asterisk/modules.conf asterisk/logger.conf asterisk/rtp.conf; do
+for required in scripts/render-config.py scripts/tomos-sipserver-check scripts/tomos-sipserver-apply-config tomos_sipserver/api.py tomos_sipserver/db.py dashboard/index.html dashboard/app.js dashboard/style.css requirements.txt systemd/asterisk.service systemd/tomos-sipserver.service systemd/tomos-sipserver-api.service sudoers/tomos-sipserver-api asterisk/asterisk.conf asterisk/modules.conf asterisk/logger.conf asterisk/rtp.conf; do
   [[ -f "$REPO_ROOT/$required" ]] || die "Missing project file: $required (use a complete repository checkout)."
 done
 
@@ -77,6 +77,8 @@ install -d -o root -g root -m 0755 /opt/tomos-sipserver/app
 rm -rf /opt/tomos-sipserver/app/tomos_sipserver
 cp -a "$REPO_ROOT/tomos_sipserver" /opt/tomos-sipserver/app/
 install -m 0644 "$REPO_ROOT/scripts/render-config.py" /opt/tomos-sipserver/app/render-config.py
+install -d -m 0755 /opt/tomos-sipserver/app/dashboard
+cp -a "$REPO_ROOT/dashboard/." /opt/tomos-sipserver/app/dashboard/
 chown -R root:root /opt/tomos-sipserver
 python3 -m venv /opt/tomos-sipserver/venv
 /opt/tomos-sipserver/venv/bin/pip install --disable-pip-version-check --requirement "$REPO_ROOT/requirements.txt"
@@ -93,11 +95,14 @@ chmod 0600 /var/lib/tomos-sipserver/extensions.db
 
 install -d -o root -g tomos -m 0750 /etc/tomos-sipserver
 API_TOKEN="$(openssl rand -hex 32)"
-printf 'TOMOS_API_TOKEN=%s\n' "$API_TOKEN" > /etc/tomos-sipserver/api.env
+ADMIN_PASSWORD="$(openssl rand -hex 24)"
+printf 'TOMOS_API_TOKEN=%s\nTOMOS_ADMIN_PASSWORD=%s\n' "$API_TOKEN" "$ADMIN_PASSWORD" > /etc/tomos-sipserver/api.env
 chown root:tomos /etc/tomos-sipserver/api.env
 chmod 0640 /etc/tomos-sipserver/api.env
 printf '%s\n' "$API_TOKEN" > /root/tomos-sip-api-token.txt
 chmod 0600 /root/tomos-sip-api-token.txt
+printf '%s\n' "$ADMIN_PASSWORD" > /root/tomos-sip-dashboard-password.txt
+chmod 0600 /root/tomos-sip-dashboard-password.txt
 install -D -o root -g root -m 0755 "$REPO_ROOT/scripts/tomos-sipserver-apply-config" /usr/local/sbin/tomos-sipserver-apply-config
 install -D -o root -g root -m 0440 "$REPO_ROOT/sudoers/tomos-sipserver-api" /etc/sudoers.d/tomos-sipserver-api
 visudo -cf /etc/sudoers.d/tomos-sipserver-api
@@ -143,6 +148,7 @@ chmod 0600 "$CREDENTIAL_FILE"
 log "Installation completed. Asterisk ${ASTERISK_VERSION} and the extension API are running."
 log "Initial SIP credentials saved to $CREDENTIAL_FILE (root-only)."
 log "API bearer token saved to /root/tomos-sip-api-token.txt (root-only)."
+log "Dashboard password saved to /root/tomos-sip-dashboard-password.txt (root-only); open http://127.0.0.1:8000/ on the server or use a trusted HTTPS reverse proxy."
 log "Extension API listens on 127.0.0.1:8000; use a trusted HTTPS reverse proxy for remote administration."
 log "SIP: UDP 5060; RTP: UDP 10000-20000. Restrict access to your trusted LAN/VPN."
 log "No router port forwarding, public SIP exposure or SIP trunk has been configured."

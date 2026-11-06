@@ -136,6 +136,7 @@ jobs:
           runuser -u tomos -- env \
             PYTHONPATH=/opt/tomos-sipserver/app \
             TOMOS_API_TOKEN="$API_TOKEN" \
+            TOMOS_ADMIN_PASSWORD="ci-admin-password-0123456789abcdef" \
             TOMOS_DB_PATH=/var/lib/tomos-sipserver/extensions.db \
             /opt/tomos-sipserver/venv/bin/uvicorn tomos_sipserver.api:create_app --factory --host 127.0.0.1 --port 8000 &
           API_PID=$!

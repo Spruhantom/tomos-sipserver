@@ -1,10 +1,10 @@
 # TomOS Home SIP Server
 
-A self-hosted home telephone system for Debian 13, built around Asterisk with a web administration panel and an integrated browser softphone.
+A self-hosted home telephone system for Debian 13, built around Asterisk with a browser-based administration dashboard.
 
 ## Current status
 
-The Debian 13 Asterisk foundation passes CI. The repository now includes a source-build installer for Asterisk 22 LTS, PJSIP endpoints, an authenticated FastAPI extension-management API, SQLite persistence, a privileged configuration-apply helper and systemd units. The React dashboard, WebRTC client, Cisco SCCP and Yealink provisioning remain future stages.
+The Debian 13 Asterisk foundation passes CI. The repository now includes a source-build installer for Asterisk 22 LTS, PJSIP endpoints, an authenticated FastAPI extension-management API, SQLite persistence, a privileged configuration-apply helper and systemd units. The first dashboard release is a lightweight static interface served by FastAPI; WebRTC, Cisco SCCP and Yealink provisioning remain future stages.
 
 ## Install (Debian 13 only)
 
@@ -24,8 +24,8 @@ It then:
 - Stores initial SIP credentials in `/root/tomos-sip-credentials.txt` (mode 0600).
 - Installs FastAPI and initializes the SQLite extension database at `/var/lib/tomos-sipserver/extensions.db` (mode 0600).
 - Preserves existing extension 100/101 credentials when the installer is rerun.
-- Generates an API bearer token in `/root/tomos-sip-api-token.txt` (mode 0600).
-- Binds the API to `127.0.0.1:8000`; it is not exposed directly to the LAN.
+- Generates an API bearer token in `/root/tomos-sip-api-token.txt` and a separate dashboard password in `/root/tomos-sip-dashboard-password.txt` (both mode 0600).
+- Serves the dashboard and API on `127.0.0.1:8000`; it is not exposed directly to the LAN.
 - Installs a narrowly-scoped sudo helper for validated PJSIP configuration generation and reload.
 - Enables the Asterisk, health-check and API systemd units.
 
@@ -35,7 +35,7 @@ The PBX listens on UDP 5060 and uses RTP UDP 10000-20000. Keep SIP/RTP on a trus
 
 ## Extension management API
 
-The API listens on `http://127.0.0.1:8000`. It exposes public `GET /health` and bearer-authenticated `/api/v1/extensions` routes. Read the token from `/root/tomos-sip-api-token.txt` and send it as `Authorization: Bearer TOKEN`. The API is localhost-only; never expose port 8000 directly to an untrusted network.
+The dashboard is served at `http://127.0.0.1:8000/`. Sign in using the one-time generated password in `/root/tomos-sip-dashboard-password.txt`. The dashboard uses short-lived HttpOnly, SameSite=Strict session cookies plus a CSRF header for mutations; the browser never receives the API bearer token. The API remains localhost-only; never expose port 8000 directly to an untrusted network. For remote access, place it behind a trusted HTTPS reverse proxy and enable `TOMOS_COOKIE_SECURE=true` in `/etc/tomos-sipserver/api.env` before restarting the API.
 
 - `GET /api/v1/extensions` — list extensions without exposing SIP passwords.
 - `POST /api/v1/extensions` — create an extension; a generated SIP password is returned once. Body: `{"extension":"120","display_name":"Office"}`.
@@ -63,9 +63,9 @@ Each mutation regenerates PJSIP and dialplan configuration and requests an Aster
 
 - No public SIP, AMI, ARI, TFTP or admin-panel exposure by default.
 - Unique extension passwords; no default SIP passwords.
-- The API requires a per-installation bearer token and listens only on loopback.
+- The API requires a per-installation bearer token and listens only on loopback. Dashboard sessions use HttpOnly/SameSite cookies and CSRF validation; the browser does not store the API token.
 - SIP passwords are not returned by list or update operations; they are returned only at creation/reset.
-- Keep administration on the LAN/VPN and use HTTPS when a reverse proxy/dashboard is introduced.
+- Keep administration on the LAN/VPN and use HTTPS with a trusted reverse proxy for remote dashboard access; enable secure cookies when TLS is configured.
 - Never expose AMI/ARI directly to browsers or untrusted networks.
 - Call recording disabled by default, with consent and retention controls if added.
 - A private PBX does not guarantee emergency calling; verify provider emergency-call support and keep an independent means of calling emergency services.
@@ -74,7 +74,7 @@ Each mutation regenerates PJSIP and dialplan configuration and requests an Aster
 
 1. **Foundation (passed CI):** Debian 13 source-build installer, Asterisk, PJSIP, internal extensions, systemd and CI.
 2. **Extension API (current):** authenticated FastAPI CRUD, SQLite persistence, password rotation, enable/disable and configuration rollback.
-3. Administration dashboard: server status, extension/device management and audit trail.
+3. **Dashboard (initial release):** password login, session/CSRF protection, extension listing, create, enable/disable, delete and one-time password reset display. Device registration and call history remain planned.
 4. Provisioning: Yealink HTTPS profiles and Cisco SCCP model-specific provisioning.
 5. Browser phone: SIP.js, WSS, SRTP and persistent in-dashboard call controls.
 6. Home features: voicemail, call history, groups, forwarding, DND, backups and restore.

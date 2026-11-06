@@ -16,7 +16,7 @@ class ExtensionApiTests(unittest.TestCase):
         self.applies = 0
         def apply():
             self.applies += 1
-        self.client = TestClient(create_app(self.db, "test-token-" + "x" * 40, apply))
+        self.client = TestClient(create_app(self.db, "test-token-" + "x" * 40, apply, admin_password="admin-test-password-0123456789"))
         self.headers = {"Authorization": "Bearer test-token-" + "x" * 40}
 
     def tearDown(self):
@@ -46,6 +46,23 @@ class ExtensionApiTests(unittest.TestCase):
         deleted = self.client.delete("/api/v1/extensions/120", headers=self.headers)
         self.assertEqual(deleted.status_code, 204)
 
+
+    def test_dashboard_login_sets_session_and_csrf_protects_mutations(self):
+        response = self.client.post("/api/v1/auth/login", json={"password": "admin-test-password-0123456789"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("tomos_session", response.cookies)
+        self.assertEqual(self.client.get("/api/v1/extensions").status_code, 200)
+        self.assertEqual(self.client.post("/api/v1/extensions", json={"extension": "124", "display_name": "No CSRF"}).status_code, 401)
+        csrf = response.cookies.get("tomos_csrf")
+        created = self.client.post("/api/v1/extensions", headers={"X-Tomos-CSRF": csrf}, json={"extension": "124", "display_name": "Browser"})
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(self.client.post("/api/v1/auth/logout").status_code, 200)
+        self.assertEqual(self.client.get("/api/v1/extensions").status_code, 401)
+
+    def test_dashboard_rejects_wrong_password(self):
+        response = self.client.post("/api/v1/auth/login", json={"password": "incorrect"})
+        self.assertEqual(response.status_code, 401)
+
     def test_duplicate_extension_is_rejected(self):
         payload = {"extension": "121", "display_name": "Desk"}
         self.assertEqual(self.client.post("/api/v1/extensions", headers=self.headers, json=payload).status_code, 201)
@@ -54,7 +71,7 @@ class ExtensionApiTests(unittest.TestCase):
     def test_failed_config_apply_rolls_back_database(self):
         def fail():
             raise RuntimeError("reload failed")
-        client = TestClient(create_app(self.db, "another-test-token-" + "x" * 40, fail))
+        client = TestClient(create_app(self.db, "another-test-token-" + "x" * 40, fail, admin_password="admin-test-password-0123456789"))
         response = client.post("/api/v1/extensions", headers={"Authorization": "Bearer another-test-token-" + "x" * 40}, json={"extension": "122", "display_name": "Rollback"})
         self.assertEqual(response.status_code, 503)
         with connect(self.db) as connection:
