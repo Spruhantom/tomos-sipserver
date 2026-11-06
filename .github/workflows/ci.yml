@@ -102,6 +102,7 @@ jobs:
             --seed-extension "101:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
           chown tomos:tomos /var/lib/tomos-sipserver/extensions.db
           install -D -o root -g root -m 0755 scripts/tomos-sipserver-apply-config /usr/local/sbin/tomos-sipserver-apply-config
+          install -D -o root -g root -m 0755 scripts/tomos-sipserver-status /usr/local/sbin/tomos-sipserver-status
           install -D -o root -g root -m 0440 sudoers/tomos-sipserver-api /etc/sudoers.d/tomos-sipserver-api
           visudo -cf /etc/sudoers.d/tomos-sipserver-api
       - name: Start Asterisk and verify PJSIP endpoints and dialplan
@@ -127,6 +128,9 @@ jobs:
           printf '%s\n' "$ENDPOINTS"
           grep -Fq '100/100' <<<"$ENDPOINTS"
           grep -Fq '101/101' <<<"$ENDPOINTS"
+          STATUS="$(/usr/local/sbin/tomos-sipserver-status)"
+          grep -Fq '"status": "online"' <<<"$STATUS"
+          grep -Fq '"registered_count": 0' <<<"$STATUS"
           DIALPLAN="$(asterisk -rx 'dialplan show tomos-internal')"
           printf '%s\n' "$DIALPLAN"
           grep -Fq '100' <<<"$DIALPLAN"

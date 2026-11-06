@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+"""Return a limited, secret-free Asterisk status snapshot for the TomOS API."""
+from __future__ import annotations
+import json
+import re
+import subprocess
+import sys
+ASTERISK = "/usr/sbin/asterisk"
+EXTENSION = re.compile(r"^[1-9][0-9]{2,5}$")
+def run_cli(command: str) -> str:
+    result = subprocess.run([ASTERISK, "-rx", command], capture_output=True, text=True, timeout=8, check=False)
+    output = (result.stdout + result.stderr).strip()
+    if result.returncode != 0 or "Unable to connect" in output or "No such command" in output:
+        raise RuntimeError("Asterisk CLI unavailable")
+    return output
+def parse_contacts(output: str) -> list[dict[str, str]]:
+    contacts: dict[str, str] = {}
+    for line in output.splitlines():
+        if not re.match(r"^\s*Contact:\s+", line):
+            continue
+        fields = line.split()
+        if len(fields) < 4:
+            continue
+        extension = fields[1].split("/", 1)[0]
+        if EXTENSION.fullmatch(extension):
+            contacts[extension] = fields[-2][:24]
+    return [{"extension":number,"status":state} for number,state in sorted(contacts.items())]
+def main() -> int:
+    if len(sys.argv) != 1:
+        print("This command accepts no arguments", file=sys.stderr)
+        return 2
+    try:
+        uptime = run_cli("core show uptime")
+        contacts = parse_contacts(run_cli("pjsip show contacts"))
+        print(json.dumps({"status":"online","uptime":uptime[:160],"registered_contacts":contacts,"registered_count":len(contacts)}))
+        return 0
+    except (OSError, subprocess.TimeoutExpired, RuntimeError):
+        print(json.dumps({"status":"offline","uptime":None,"registered_contacts":[],"registered_count":0}))
+        return 1
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -79,12 +79,33 @@ def _apply_config() -> None:
         raise RuntimeError(detail[-1000:])
 
 
+def _asterisk_status() -> dict:
+    """Read a sanitised Asterisk status snapshot through the fixed root helper."""
+    try:
+        result = subprocess.run(["/usr/bin/sudo", "-n", "/usr/local/sbin/tomos-sipserver-status"], check=False, capture_output=True, text=True, timeout=12)
+        if result.returncode != 0:
+            return {"status":"offline","uptime":None,"registered_contacts":[],"registered_count":0}
+        import json
+        payload = json.loads(result.stdout)
+        contacts = payload.get("registered_contacts", [])
+        if not isinstance(contacts, list):
+            raise ValueError("Invalid contact list")
+        safe = []
+        for item in contacts:
+            if isinstance(item, dict) and re.fullmatch(EXTENSION_PATTERN, str(item.get("extension", ""))):
+                safe.append({"extension":str(item["extension"]), "status":str(item.get("status","Unknown"))[:24]})
+        return {"status":"online" if payload.get("status")=="online" else "offline", "uptime":str(payload.get("uptime") or "")[:160] or None, "registered_contacts":safe, "registered_count":len(safe)}
+    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError):
+        return {"status":"offline","uptime":None,"registered_contacts":[],"registered_count":0}
+
+
 def create_app(
     database_path: str | Path | None = None,
     api_token: str | None = None,
     apply_callback: Callable[[], None] | None = None,
     admin_password: str | None = None,
     static_dir: str | Path | None = None,
+    status_callback: Callable[[], dict] | None = None,
 ) -> FastAPI:
     db_path = Path(database_path or os.environ.get("TOMOS_DB_PATH", str(DEFAULT_DB)))
     token = api_token if api_token is not None else os.environ.get("TOMOS_API_TOKEN", "")
@@ -92,6 +113,7 @@ def create_app(
         raise RuntimeError("TOMOS_API_TOKEN must be configured with at least 32 characters")
     initialize_database(db_path)
     apply = apply_callback or _apply_config
+    get_status = status_callback or _asterisk_status
     admin_secret = admin_password if admin_password is not None else os.environ.get("TOMOS_ADMIN_PASSWORD", "")
     if len(admin_secret) < 24:
         raise RuntimeError("TOMOS_ADMIN_PASSWORD must be configured with at least 24 characters")
@@ -185,6 +207,10 @@ def create_app(
             total = connection.execute("SELECT COUNT(*) FROM extensions").fetchone()[0]
             enabled = connection.execute("SELECT COUNT(*) FROM extensions WHERE enabled = 1").fetchone()[0]
         return {"api": "online", "asterisk": "not_checked", "extensions_total": total, "extensions_enabled": enabled}
+
+    @app.get("/api/v1/dashboard/status", dependencies=[Depends(require_token)], tags=["dashboard"])
+    def dashboard_status():
+        return get_status()
 
     @app.get("/api/v1/extensions", response_model=list[ExtensionView], dependencies=[Depends(require_token)])
     def list_extensions():

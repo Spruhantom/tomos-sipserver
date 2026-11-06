@@ -104,6 +104,7 @@ chmod 0600 /root/tomos-sip-api-token.txt
 printf '%s\n' "$ADMIN_PASSWORD" > /root/tomos-sip-dashboard-password.txt
 chmod 0600 /root/tomos-sip-dashboard-password.txt
 install -D -o root -g root -m 0755 "$REPO_ROOT/scripts/tomos-sipserver-apply-config" /usr/local/sbin/tomos-sipserver-apply-config
+install -D -o root -g root -m 0755 "$REPO_ROOT/scripts/tomos-sipserver-status" /usr/local/sbin/tomos-sipserver-status
 install -D -o root -g root -m 0440 "$REPO_ROOT/sudoers/tomos-sipserver-api" /etc/sudoers.d/tomos-sipserver-api
 visudo -cf /etc/sudoers.d/tomos-sipserver-api
 install -D -m 0644 "$REPO_ROOT/systemd/tomos-sipserver-api.service" /etc/systemd/system/tomos-sipserver-api.service

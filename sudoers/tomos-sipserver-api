@@ -1,2 +1,3 @@
 # The API can invoke only the fixed TomOS configuration renderer.
 tomos ALL=(root) NOPASSWD: /usr/local/sbin/tomos-sipserver-apply-config
+tomos ALL=(root) NOPASSWD: /usr/local/sbin/tomos-sipserver-status

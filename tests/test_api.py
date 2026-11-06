@@ -59,6 +59,19 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertEqual(self.client.post("/api/v1/auth/logout").status_code, 200)
         self.assertEqual(self.client.get("/api/v1/extensions").status_code, 401)
 
+    def test_dashboard_status_returns_sanitised_device_snapshot(self):
+        token = "status-token-" + "x" * 40
+        app = create_app(self.db, token, lambda: None, admin_password="admin-test-password-0123456789",
+                         status_callback=lambda: {"status":"online","uptime":"up 2 hours","registered_count":1,
+                             "registered_contacts":[{"extension":"100","status":"Avail","uri":"sip:secret@10.0.0.2"}]})
+        response = TestClient(app).get("/api/v1/dashboard/status", headers={"Authorization":"Bearer "+token})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["registered_contacts"], [{"extension":"100","status":"Avail"}])
+        self.assertNotIn("10.0.0.2", response.text)
+
+    def test_dashboard_status_requires_authentication(self):
+        self.assertEqual(self.client.get("/api/v1/dashboard/status").status_code, 401)
+
     def test_dashboard_rejects_wrong_password(self):
         response = self.client.post("/api/v1/auth/login", json={"password": "incorrect"})
         self.assertEqual(response.status_code, 401)
