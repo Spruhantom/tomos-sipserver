@@ -35,7 +35,7 @@ jobs:
     container:
       image: debian:13
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Asterisk build dependencies
         run: |
           apt-get update
