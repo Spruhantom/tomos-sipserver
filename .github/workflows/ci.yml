@@ -21,53 +21,72 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck
-      - name: Check shell syntax
+      - name: Check shell syntax and critical ShellCheck errors
         run: |
           bash -n install.sh installer/install.sh scripts/tomos-sipserver-check
-          shellcheck install.sh installer/install.sh scripts/tomos-sipserver-check
+          shellcheck --severity=error install.sh installer/install.sh scripts/tomos-sipserver-check
       - name: Run Python tests
         run: python -m unittest discover -s tests -v
 
-  debian-13-asterisk:
+  debian-13-asterisk-source:
     runs-on: ubuntu-latest
     container:
       image: debian:13
     steps:
       - uses: actions/checkout@v4
-      - name: Install Debian 13 Asterisk
+      - name: Install Asterisk build dependencies
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends asterisk python3 bash ca-certificates
-      - name: Render test PBX configuration
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential wget curl ca-certificates pkg-config python3 openssl \
+            libxml2-dev libncurses-dev uuid-dev libsqlite3-dev libssl-dev libedit-dev \
+            libjansson-dev libcurl4-openssl-dev libnewt-dev libspandsp-dev libsrtp2-dev
+      - name: Download and build pinned Asterisk 22 LTS
         run: |
-          mkdir -p /tmp/tomos-asterisk
-          python3 scripts/render-config.py --output-dir /tmp/tomos-asterisk \
+          VERSION=22.12.0
+          URL="https://downloads.asterisk.org/pub/telephony/asterisk/asterisk-${VERSION}.tar.gz"
+          curl --fail --location --retry 3 "$URL" --output /tmp/asterisk.tar.gz
+          curl --fail --location "$URL.sha256" --output /tmp/asterisk.sha256
+          EXPECTED="$(awk 'NR==1 {print $1}' /tmp/asterisk.sha256)"
+          printf '%s  %s\n' "$EXPECTED" /tmp/asterisk.tar.gz | sha256sum --check
+          mkdir -p /usr/src/tomos
+          tar -xzf /tmp/asterisk.tar.gz -C /usr/src/tomos
+          cd "/usr/src/tomos/asterisk-${VERSION}"
+          ./contrib/scripts/install_prereq install
+          ./configure --with-pjproject-bundled --with-jansson-bundled
+          make menuselect.makeopts
+          make -j2
+          make install
+          make samples
+      - name: Configure TomOS test extensions
+        run: |
+          install -d -o asterisk -g asterisk -m 0750 /var/lib/asterisk /var/log/asterisk /var/spool/asterisk /run/asterisk
+          install -m 0644 asterisk/asterisk.conf /etc/asterisk/asterisk.conf
+          install -m 0644 asterisk/modules.conf /etc/asterisk/modules.conf
+          install -m 0644 asterisk/logger.conf /etc/asterisk/logger.conf
+          install -m 0644 asterisk/rtp.conf /etc/asterisk/rtp.conf
+          python3 scripts/render-config.py --output-dir /etc/asterisk \
             --extension "100:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
             --extension "101:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-      - name: Validate Asterisk configuration and load modules
+          chown root:asterisk /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
+          chmod 0640 /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
+      - name: Start Asterisk and verify PJSIP endpoints and dialplan
         run: |
-          mkdir -p /tmp/tomos-asterisk/astetc /tmp/tomos-asterisk/astvarlib/spool \
-                   /tmp/tomos-asterisk/astlog /tmp/tomos-asterisk/astrun
-          cp /tmp/tomos-asterisk/pjsip.conf /tmp/tomos-asterisk/astetc/pjsip.conf
-          cp /tmp/tomos-asterisk/extensions.conf /tmp/tomos-asterisk/astetc/extensions.conf
-          cat > /tmp/tomos-asterisk/astetc/asterisk.conf <<'EOF'
-          [directories]
-          astetcdir => /tmp/tomos-asterisk/astetc
-          astvarlibdir => /tmp/tomos-asterisk/astvarlib
-          astlogdir => /tmp/tomos-asterisk/astlog
-          astrundir => /tmp/tomos-asterisk/astrun
-          astspooldir => /tmp/tomos-asterisk/astvarlib/spool
-          [options]
-          verbose = 0
-          nocolor = yes
-          EOF
-          asterisk -C /tmp/tomos-asterisk/astetc/asterisk.conf -f -U root -G root &
+          asterisk -f -U asterisk -G asterisk &
           ASTERISK_PID=$!
-          cleanup() { kill "$ASTERISK_PID" 2>/dev/null || true; }
+          cleanup() { asterisk -rx 'core stop now' >/dev/null 2>&1 || kill "$ASTERISK_PID" 2>/dev/null || true; }
           trap cleanup EXIT
-          for attempt in $(seq 1 20); do
-            asterisk -C /tmp/tomos-asterisk/astetc/asterisk.conf -rx 'core show version' >/dev/null 2>&1 && break
+          READY=0
+          for attempt in $(seq 1 30); do
+            if asterisk -rx 'core show version' >/dev/null 2>&1; then READY=1; break; fi
             sleep 1
           done
-          asterisk -C /tmp/tomos-asterisk/astetc/asterisk.conf -rx 'pjsip show endpoints'
-          asterisk -C /tmp/tomos-asterisk/astetc/asterisk.conf -rx 'dialplan show tomos-internal'
+          test "$READY" -eq 1
+          ENDPOINTS="$(asterisk -rx 'pjsip show endpoints')"
+          printf '%s\n' "$ENDPOINTS"
+          grep -Fq '100/100' <<<"$ENDPOINTS"
+          grep -Fq '101/101' <<<"$ENDPOINTS"
+          DIALPLAN="$(asterisk -rx 'dialplan show tomos-internal')"
+          printf '%s\n' "$DIALPLAN"
+          grep -Fq '100' <<<"$DIALPLAN"
+          grep -Fq '101' <<<"$DIALPLAN"

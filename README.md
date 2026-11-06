@@ -4,7 +4,7 @@ A self-hosted home telephone system for Debian 13, built around Asterisk with a 
 
 ## Current status
 
-The first Debian 13 foundation is now committed: an Asterisk installer, generated PJSIP endpoints 100/101, a basic internal dialplan, a systemd health-check unit and GitHub Actions tests. The web interface, WebRTC client, Cisco SCCP and Yealink provisioning are future stages and are not implemented yet.
+The Debian 13 foundation is under development. The repository contains a source-build installer for Asterisk 22 LTS, generated PJSIP endpoints 100/101, a basic internal dialplan, systemd units and CI that compiles Asterisk and checks configuration loading. The web interface, WebRTC client, Cisco SCCP and Yealink provisioning are future stages.
 
 ## Install (Debian 13 only)
 
@@ -14,25 +14,27 @@ Clone this repository on a clean Debian 13 host, then run:
 sudo ./install.sh
 ```
 
-The installer:
-- Checks for Debian 13 and root privileges.
-- Installs Debian's Asterisk package and required utilities.
-- Backs up existing `/etc/asterisk/pjsip.conf` and `extensions.conf` before replacing them with the initial TomOS configuration. **Do not run on an existing PBX without reviewing the backup/restore implications.**
+The installer builds the pinned Asterisk 22.12.0 LTS source release because Debian 13 stable does not currently publish the Asterisk PBX package. It verifies the source archive against the SHA-256 file from the official Asterisk download site before compiling.
+
+It then:
+- Installs build dependencies and compiles Asterisk with bundled PJProject.
+- Creates the `asterisk` service account and required runtime directories.
+- Backs up existing Asterisk configuration files before installing the TomOS base configuration.
 - Creates extensions 100 and 101 with cryptographically random passwords.
-- Stores the initial credentials in `/root/tomos-sip-credentials.txt` (mode 0600).
-- Enables Asterisk and a TomOS systemd health-check unit.
-- Verifies that Asterisk starts and both endpoints are loaded.
+- Stores initial credentials in `/root/tomos-sip-credentials.txt` (mode 0600).
+- Installs and enables the Asterisk and TomOS systemd units.
+- Checks that Asterisk starts and both PJSIP endpoints load.
 
-The initial setup listens on UDP 5060 and uses the Asterisk RTP range UDP 10000-20000. Keep this on a trusted home LAN or VPN. The installer does not configure router port forwarding or expose SIP to the public internet. It does not configure a SIP trunk, TLS, WebRTC, a firewall or external telephone-number service.
+**Important:** this is an initial PBX foundation, not yet a finished home PBX. Run it on a clean Debian 13 machine or VM. Existing Asterisk configuration files are backed up, but the installer replaces the active base configuration files and should not be run over another live PBX without reviewing the migration first.
 
-Extensions can call one another by dialling 100 or 101. Dial `*65` for the Asterisk echo test (where the demo audio prompt is installed).
+The initial setup listens on UDP 5060 and uses RTP UDP 10000-20000. Keep this on a trusted home LAN or VPN. No router port-forwarding, public SIP exposure, firewall rules, SIP trunk, TLS, WebRTC or web interface is configured yet. Extensions 100 and 101 can call one another. Dial `*65` for the Asterisk echo test.
 
-## Planned technology
+## Technology
 
 | Layer | Technology |
 |---|---|
 | OS | Debian 13 |
-| PBX engine | Asterisk |
+| PBX engine | Asterisk 22 LTS (source build) |
 | SIP | PJSIP |
 | Cisco SCCP | chan-sccp, separately built and compatibility-tested |
 | API | Python / FastAPI |
@@ -53,7 +55,7 @@ Extensions can call one another by dialling 100 or 101. Dial `*65` for the Aster
 - Optional SIP trunk connectivity for external calls.
 - Backups, restore, upgrades and monitoring.
 
-## Security principles
+## Security defaults
 
 - No public SIP, AMI, ARI, TFTP or admin-panel exposure by default.
 - Strong, unique extension credentials; no default passwords.
@@ -64,7 +66,7 @@ Extensions can call one another by dialling 100 or 101. Dial `*65` for the Aster
 
 ## Development roadmap
 
-1. **Foundation (current):** Debian 13 installer, Asterisk, PJSIP, internal extensions, systemd health check and CI.
+1. **Foundation (current):** Debian 13 source-build installer, Asterisk, PJSIP, internal extensions, systemd and CI.
 2. PBX core: safe extension lifecycle, configuration validation and rollback.
 3. Administration API/UI: authentication, dashboard, extension/device management and audit trail.
 4. Provisioning: Yealink HTTPS profiles and Cisco SCCP model-specific provisioning.
@@ -74,6 +76,6 @@ Extensions can call one another by dialling 100 or 101. Dial `*65` for the Aster
 
 ## Tests
 
-GitHub Actions runs Python renderer tests, Bash syntax/ShellCheck checks, and a Debian 13 job that installs Asterisk, renders the test configuration, starts Asterisk in the foreground and queries PJSIP endpoints and the internal dialplan.
+GitHub Actions runs Python renderer tests, Bash syntax/ShellCheck checks, and a Debian 13 job that downloads and verifies the pinned Asterisk source, compiles it, starts the PBX process and checks that PJSIP endpoints 100/101 and the internal dialplan load. This verifies the PBX process and configuration; it does not yet prove two-way audio between physical phones.
 
 Hardware tests are still required before claiming a specific Cisco or Yealink model is supported.

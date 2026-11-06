@@ -1,0 +1,26 @@
+[Unit]
+Description=Asterisk Open Source PBX
+After=network.target
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=asterisk
+Group=asterisk
+RuntimeDirectory=asterisk
+RuntimeDirectoryMode=0755
+ExecStart=/usr/sbin/asterisk -f -U asterisk -G asterisk
+ExecReload=/usr/sbin/asterisk -rx "core reload"
+ExecStop=/usr/sbin/asterisk -rx "core stop now"
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/etc/asterisk /var/lib/asterisk /var/log/asterisk /var/spool/asterisk /run/asterisk
+
+[Install]
+WantedBy=multi-user.target

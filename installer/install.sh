@@ -2,73 +2,114 @@
 set -Eeuo pipefail
 log() { printf '[TomOS SIP] %s\n' "$*"; }
 die() { printf '[TomOS SIP] ERROR: %s\n' "$*" >&2; exit 1; }
-[[ "${EUID}" -eq 0 ]] || die "Run this installer as root (for example: sudo ./install.sh)."
+
+[[ "${EUID}" -eq 0 ]] || die "Run as root: sudo ./install.sh"
 [[ -r /etc/os-release ]] || die "Cannot identify operating system."
 . /etc/os-release
-[[ "${ID:-}" == "debian" && "${VERSION_ID:-}" == "13" ]] || die "This installer supports Debian 13 only; detected ${PRETTY_NAME:-unknown}."
+[[ "${ID:-}" == "debian" && "${VERSION_ID:-}" == "13" ]] || die "Debian 13 only. Detected: ${PRETTY_NAME:-unknown}"
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
-RENDERER="$REPO_ROOT/scripts/render-config.py"
-CHECKER="$REPO_ROOT/scripts/tomos-sipserver-check"
-UNIT="$REPO_ROOT/systemd/tomos-sipserver.service"
-[[ -f "$RENDERER" && -f "$CHECKER" && -f "$UNIT" ]] || die "Run install.sh from a complete TomOS repository checkout."
-command -v apt-get >/dev/null || die "apt-get is required."
+for required in scripts/render-config.py scripts/tomos-sipserver-check systemd/asterisk.service systemd/tomos-sipserver.service asterisk/asterisk.conf asterisk/modules.conf asterisk/logger.conf asterisk/rtp.conf; do
+  [[ -f "$REPO_ROOT/$required" ]] || die "Missing project file: $required (use a complete repository checkout)."
+done
+
 export DEBIAN_FRONTEND=noninteractive
-log "Installing Asterisk and required tools."
+ASTERISK_VERSION=22.12.0
+SOURCE_URL="https://downloads.asterisk.org/pub/telephony/asterisk/asterisk-${ASTERISK_VERSION}.tar.gz"
+BUILD_ROOT=/usr/local/src/tomos-asterisk
+ARCHIVE="$BUILD_ROOT/asterisk-${ASTERISK_VERSION}.tar.gz"
+SOURCE_DIR="$BUILD_ROOT/asterisk-${ASTERISK_VERSION}"
+BUILD_JOBS="${TOMOS_BUILD_JOBS:-2}"
+[[ "$BUILD_JOBS" =~ ^[1-9][0-9]?$ ]] || die "TOMOS_BUILD_JOBS must be a positive integer from 1 to 99."
+
+log "Installing Asterisk build dependencies."
 apt-get update
-apt-get install -y --no-install-recommends asterisk python3 openssl ca-certificates
-ASTERISK_DIR=/etc/asterisk
-BACKUP_DIR="$ASTERISK_DIR/tomos-backups/$(date -u +%Y%m%dT%H%M%SZ)"
+apt-get install -y --no-install-recommends build-essential git wget curl ca-certificates pkg-config python3 openssl \
+  libxml2-dev libncurses-dev uuid-dev libsqlite3-dev libssl-dev libedit-dev libjansson-dev \
+  libcurl4-openssl-dev libnewt-dev libspandsp-dev libsrtp2-dev
+
+install -d -m 0755 "$BUILD_ROOT"
+if [[ ! -s "$ARCHIVE" ]]; then
+  log "Downloading Asterisk ${ASTERISK_VERSION} LTS source."
+  curl --fail --location --retry 3 --retry-delay 2 "$SOURCE_URL" --output "$ARCHIVE"
+fi
+CHECKSUM_FILE="$ARCHIVE.sha256"
+curl --fail --location --retry 3 "$SOURCE_URL.sha256" --output "$CHECKSUM_FILE"
+EXPECTED_SHA="$(awk 'NR==1 {print $1}' "$CHECKSUM_FILE")"
+[[ "$EXPECTED_SHA" =~ ^[A-Fa-f0-9]{64}$ ]] || die "Could not read a valid SHA-256 checksum from the official Asterisk download."
+printf '%s  %s\n' "$EXPECTED_SHA" "$ARCHIVE" | sha256sum --check --status || die "Asterisk source checksum verification failed."
+
+if [[ ! -d "$SOURCE_DIR" ]]; then
+  tar -xzf "$ARCHIVE" -C "$BUILD_ROOT"
+fi
+cd "$SOURCE_DIR"
+log "Installing any additional Asterisk prerequisites."
+./contrib/scripts/install_prereq install
+log "Configuring and compiling Asterisk ${ASTERISK_VERSION} with bundled PJProject."
+./configure --with-pjproject-bundled --with-jansson-bundled
+make menuselect.makeopts
+make -j"$BUILD_JOBS"
+make install
+make samples
+make config
+ldconfig
+
+if ! getent group asterisk >/dev/null; then groupadd --system asterisk; fi
+if ! id asterisk >/dev/null 2>&1; then
+  useradd --system --gid asterisk --home-dir /var/lib/asterisk --create-home --shell /usr/sbin/nologin asterisk
+fi
+install -d -o asterisk -g asterisk -m 0750 /var/lib/asterisk /var/log/asterisk /var/spool/asterisk /var/spool/asterisk/voicemail /var/lib/asterisk/agi-bin
+install -d -o asterisk -g asterisk -m 0755 /run/asterisk
+install -d -m 0750 /etc/asterisk/tomos-backups
+BACKUP_DIR="/etc/asterisk/tomos-backups/$(date -u +%Y%m%dT%H%M%SZ)"
 install -d -m 0750 "$BACKUP_DIR"
-for name in pjsip.conf extensions.conf; do
-  if [[ -f "$ASTERISK_DIR/$name" ]]; then cp -a "$ASTERISK_DIR/$name" "$BACKUP_DIR/$name"; fi
+for name in asterisk.conf modules.conf logger.conf rtp.conf pjsip.conf extensions.conf; do
+  if [[ -f "/etc/asterisk/$name" ]]; then cp -a "/etc/asterisk/$name" "$BACKUP_DIR/$name"; fi
 done
 log "Existing Asterisk configuration backed up to $BACKUP_DIR."
+
+install -m 0644 "$REPO_ROOT/asterisk/asterisk.conf" /etc/asterisk/asterisk.conf
+install -m 0644 "$REPO_ROOT/asterisk/modules.conf" /etc/asterisk/modules.conf
+install -m 0644 "$REPO_ROOT/asterisk/logger.conf" /etc/asterisk/logger.conf
+install -m 0644 "$REPO_ROOT/asterisk/rtp.conf" /etc/asterisk/rtp.conf
+
 EXT100_SECRET="$(openssl rand -hex 24)"
 EXT101_SECRET="$(openssl rand -hex 24)"
-install -d -m 0750 "$ASTERISK_DIR"
-python3 "$RENDERER" --output-dir "$ASTERISK_DIR" \
+python3 "$REPO_ROOT/scripts/render-config.py" --output-dir /etc/asterisk \
   --extension "100:$EXT100_SECRET" --extension "101:$EXT101_SECRET"
-install -D -m 0755 "$CHECKER" /usr/local/sbin/tomos-sipserver-check
-install -D -m 0644 "$UNIT" /etc/systemd/system/tomos-sipserver.service
-if id asterisk >/dev/null 2>&1; then
-  chown root:asterisk "$ASTERISK_DIR/pjsip.conf" "$ASTERISK_DIR/extensions.conf"
-  chmod 0640 "$ASTERISK_DIR/pjsip.conf" "$ASTERISK_DIR/extensions.conf"
-fi
+chown root:asterisk /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
+chmod 0640 /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
+chown -R asterisk:asterisk /var/lib/asterisk /var/log/asterisk /var/spool/asterisk
+chown asterisk:asterisk /run/asterisk
+
+install -D -m 0644 "$REPO_ROOT/systemd/asterisk.service" /etc/systemd/system/asterisk.service
+install -D -m 0755 "$REPO_ROOT/scripts/tomos-sipserver-check" /usr/local/sbin/tomos-sipserver-check
+install -D -m 0644 "$REPO_ROOT/systemd/tomos-sipserver.service" /etc/systemd/system/tomos-sipserver.service
 systemctl daemon-reload
 systemctl enable asterisk.service
 systemctl restart asterisk.service
+
 if ! systemctl is-active --quiet asterisk.service; then
-  log "Asterisk failed to start; restoring previous configuration."
-  for name in pjsip.conf extensions.conf; do
-    if [[ -f "$BACKUP_DIR/$name" ]]; then cp -a "$BACKUP_DIR/$name" "$ASTERISK_DIR/$name"; fi
-  done
-  systemctl restart asterisk.service || true
-  die "Asterisk did not start. Previous configuration was restored where available."
+  journalctl -u asterisk.service -n 80 --no-pager >&2 || true
+  die "Asterisk failed to start. Review the backup in $BACKUP_DIR and service logs."
 fi
 systemctl enable --now tomos-sipserver.service
-if ! /usr/local/sbin/tomos-sipserver-check; then
-  log "TomOS validation failed; restoring previous configuration."
-  for name in pjsip.conf extensions.conf; do
-    if [[ -f "$BACKUP_DIR/$name" ]]; then cp -a "$BACKUP_DIR/$name" "$ASTERISK_DIR/$name"; fi
-  done
-  systemctl restart asterisk.service || true
-  systemctl disable --now tomos-sipserver.service || true
-  die "Asterisk started, but TomOS endpoint validation failed. Previous configuration was restored where available."
-fi
+/usr/local/sbin/tomos-sipserver-check
+
 CREDENTIAL_FILE=/root/tomos-sip-credentials.txt
 umask 077
 {
   printf 'TomOS Home SIP Server initial extensions\n'
+  printf 'Asterisk: %s\n' "$ASTERISK_VERSION"
   printf 'Generated: %s\n\n' "$(date -u +%FT%TZ)"
   printf 'Extension 100 password: %s\n' "$EXT100_SECRET"
   printf 'Extension 101 password: %s\n' "$EXT101_SECRET"
   printf '\nStore these credentials securely. This file is readable by root only.\n'
 } > "$CREDENTIAL_FILE"
 chmod 0600 "$CREDENTIAL_FILE"
-log "Installation completed."
-log "Asterisk: $(systemctl is-active asterisk.service)"
-log "TomOS check service: $(systemctl is-active tomos-sipserver.service)"
+
+log "Installation completed. Asterisk ${ASTERISK_VERSION} is running."
 log "Initial SIP credentials saved to $CREDENTIAL_FILE (root-only)."
-log "SIP listens on UDP 5060; RTP uses UDP 10000-20000. Keep these ports on the trusted LAN/VPN only."
-log "No router port-forwarding or public internet exposure has been configured."
+log "SIP: UDP 5060; RTP: UDP 10000-20000. Restrict access to your trusted LAN/VPN."
+log "No router port forwarding, public SIP exposure, SIP trunk or web interface has been configured."
