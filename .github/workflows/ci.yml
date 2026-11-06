@@ -43,12 +43,14 @@ jobs:
             libjansson-dev libcurl4-openssl-dev libnewt-dev libspandsp-dev libsrtp2-dev \
             libspeexdsp-dev libopus-dev libogg-dev libvorbis-dev libasound2-dev
       - name: Download and verify pinned Asterisk source
+        shell: bash
         run: |
+          set -Eeuo pipefail
           VERSION=22.12.0
           URL="https://github.com/asterisk/asterisk/releases/download/${VERSION}/asterisk-${VERSION}.tar.gz"
           curl --fail --location --retry 3 "$URL" --output /tmp/asterisk.tar.gz
           EXPECTED=f8b2ba98aac6c4ff3376bc0a2868bea6ed577ca684efb7ec739ae6e8ce6e35e2
-          printf '%s  %s\\n' "$EXPECTED" /tmp/asterisk.tar.gz | sha256sum --check
+          printf '%s  %s\n' "$EXPECTED" /tmp/asterisk.tar.gz | sha256sum --check
           mkdir -p /usr/src/tomos
           tar -xzf /tmp/asterisk.tar.gz -C /usr/src/tomos
       - name: Install Asterisk-specific prerequisites
@@ -101,10 +103,10 @@ jobs:
             exit 1
           fi
           ENDPOINTS="$(asterisk -rx 'pjsip show endpoints')"
-          printf '%s\\n' "$ENDPOINTS"
+          printf '%s\n' "$ENDPOINTS"
           grep -Fq '100/100' <<<"$ENDPOINTS"
           grep -Fq '101/101' <<<"$ENDPOINTS"
           DIALPLAN="$(asterisk -rx 'dialplan show tomos-internal')"
-          printf '%s\\n' "$DIALPLAN"
+          printf '%s\n' "$DIALPLAN"
           grep -Fq '100' <<<"$DIALPLAN"
           grep -Fq '101' <<<"$DIALPLAN"
