@@ -43,7 +43,7 @@ jobs:
             build-essential bison flex libtool-bin git wget curl ca-certificates pkg-config python3 openssl \
             libxml2-dev libncurses-dev uuid-dev libsqlite3-dev libssl-dev libedit-dev \
             libjansson-dev libcurl4-openssl-dev libnewt-dev libspandsp-dev libsrtp2-dev \
-            libspeexdsp-dev libopus-dev libogg-dev libvorbis-dev libasound2-dev
+            libspeexdsp-dev libopus-dev libogg-dev libvorbis-dev libasound2-dev python3-venv sudo
       - name: Download and verify pinned Asterisk source
         shell: bash
         run: |
@@ -85,6 +85,25 @@ jobs:
             --extension "101:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
           chown root:asterisk /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
           chmod 0640 /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
+      - name: Prepare API integration environment
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          useradd --system --create-home --home-dir /var/lib/tomos-sipserver --shell /usr/sbin/nologin tomos
+          install -d -o tomos -g tomos -m 0700 /var/lib/tomos-sipserver
+          install -d -o root -g root -m 0755 /opt/tomos-sipserver/app
+          cp -a tomos_sipserver /opt/tomos-sipserver/app/
+          install -m 0644 scripts/render-config.py /opt/tomos-sipserver/app/render-config.py
+          python3 -m venv /opt/tomos-sipserver/venv
+          /opt/tomos-sipserver/venv/bin/pip install --disable-pip-version-check --requirement requirements.txt
+          PYTHONPATH=/opt/tomos-sipserver/app /opt/tomos-sipserver/venv/bin/python -m tomos_sipserver.db \
+            --database /var/lib/tomos-sipserver/extensions.db \
+            --seed-extension "100:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+            --seed-extension "101:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          chown tomos:tomos /var/lib/tomos-sipserver/extensions.db
+          install -D -o root -g root -m 0755 scripts/tomos-sipserver-apply-config /usr/local/sbin/tomos-sipserver-apply-config
+          install -D -o root -g root -m 0440 sudoers/tomos-sipserver-api /etc/sudoers.d/tomos-sipserver-api
+          visudo -cf /etc/sudoers.d/tomos-sipserver-api
       - name: Start Asterisk and verify PJSIP endpoints and dialplan
         shell: bash
         run: |
@@ -112,3 +131,43 @@ jobs:
           printf '%s\n' "$DIALPLAN"
           grep -Fq '100' <<<"$DIALPLAN"
           grep -Fq '101' <<<"$DIALPLAN"
+
+          API_TOKEN=ci-integration-token-0123456789abcdef0123456789abcdef
+          runuser -u tomos -- env \
+            PYTHONPATH=/opt/tomos-sipserver/app \
+            TOMOS_API_TOKEN="$API_TOKEN" \
+            TOMOS_DB_PATH=/var/lib/tomos-sipserver/extensions.db \
+            /opt/tomos-sipserver/venv/bin/uvicorn tomos_sipserver.api:create_app --factory --host 127.0.0.1 --port 8000 &
+          API_PID=$!
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8000/health >/dev/null; then break; fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:8000/health >/dev/null
+          AUTH_HEADER="Authorization: Bearer $API_TOKEN"
+          CREATED="$(curl --fail --silent --show-error -X POST http://127.0.0.1:8000/api/v1/extensions \
+            -H "$AUTH_HEADER" -H 'Content-Type: application/json' \
+            -d '{"extension":"120","display_name":"CI Test Phone"}')"
+          grep -Fq '"extension":"120"' <<<"$CREATED"
+          LIST="$(curl --fail --silent --show-error http://127.0.0.1:8000/api/v1/extensions -H "$AUTH_HEADER")"
+          grep -Fq '"extension":"120"' <<<"$LIST"
+          if grep -Fq 'sip_password' <<<"$LIST"; then
+            echo "Extension list unexpectedly exposed a SIP password" >&2
+            exit 1
+          fi
+          curl --fail --silent --show-error -X PATCH http://127.0.0.1:8000/api/v1/extensions/120 \
+            -H "$AUTH_HEADER" -H 'Content-Type: application/json' -d '{"display_name":"Updated CI Phone"}' >/dev/null
+          curl --fail --silent --show-error -X POST http://127.0.0.1:8000/api/v1/extensions/120/password \
+            -H "$AUTH_HEADER" >/dev/null
+          ENDPOINTS="$(asterisk -rx 'pjsip show endpoints')"
+          grep -Fq '120/120' <<<"$ENDPOINTS"
+          curl --fail --silent --show-error -X POST http://127.0.0.1:8000/api/v1/extensions/120/disable \
+            -H "$AUTH_HEADER" >/dev/null
+          ENDPOINTS="$(asterisk -rx 'pjsip show endpoints')"
+          if grep -Fq '120/120' <<<"$ENDPOINTS"; then
+            echo "Disabled extension 120 is still loaded in PJSIP" >&2
+            exit 1
+          fi
+          curl --fail --silent --show-error -X DELETE http://127.0.0.1:8000/api/v1/extensions/120 \
+            -H "$AUTH_HEADER" >/dev/null
+          kill "$API_PID" 2>/dev/null || true
