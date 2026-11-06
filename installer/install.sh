@@ -16,7 +16,8 @@ done
 
 export DEBIAN_FRONTEND=noninteractive
 ASTERISK_VERSION=22.12.0
-SOURCE_URL="https://downloads.asterisk.org/pub/telephony/asterisk/asterisk-${ASTERISK_VERSION}.tar.gz"
+SOURCE_URL="https://github.com/asterisk/asterisk/releases/download/${ASTERISK_VERSION}/asterisk-${ASTERISK_VERSION}.tar.gz"
+EXPECTED_SHA256=f8b2ba98aac6c4ff3376bc0a2868bea6ed577ca684efb7ec739ae6e8ce6e35e2
 BUILD_ROOT=/usr/local/src/tomos-asterisk
 ARCHIVE="$BUILD_ROOT/asterisk-${ASTERISK_VERSION}.tar.gz"
 SOURCE_DIR="$BUILD_ROOT/asterisk-${ASTERISK_VERSION}"
@@ -34,11 +35,7 @@ if [[ ! -s "$ARCHIVE" ]]; then
   log "Downloading Asterisk ${ASTERISK_VERSION} LTS source."
   curl --fail --location --retry 3 --retry-delay 2 "$SOURCE_URL" --output "$ARCHIVE"
 fi
-CHECKSUM_FILE="$ARCHIVE.sha256"
-curl --fail --location --retry 3 "$SOURCE_URL.sha256" --output "$CHECKSUM_FILE"
-EXPECTED_SHA="$(awk 'NR==1 {print $1}' "$CHECKSUM_FILE")"
-[[ "$EXPECTED_SHA" =~ ^[A-Fa-f0-9]{64}$ ]] || die "Could not read a valid SHA-256 checksum from the official Asterisk download."
-printf '%s  %s\n' "$EXPECTED_SHA" "$ARCHIVE" | sha256sum --check --status || die "Asterisk source checksum verification failed."
+printf '%s  %s\n' "$EXPECTED_SHA256" "$ARCHIVE" | sha256sum --check --status || die "Asterisk source checksum verification failed."
 
 if [[ ! -d "$SOURCE_DIR" ]]; then
   tar -xzf "$ARCHIVE" -C "$BUILD_ROOT"

@@ -45,11 +45,9 @@ jobs:
       - name: Download and verify pinned Asterisk source
         run: |
           VERSION=22.12.0
-          URL="https://downloads.asterisk.org/pub/telephony/asterisk/asterisk-${VERSION}.tar.gz"
+          URL="https://github.com/asterisk/asterisk/releases/download/${VERSION}/asterisk-${VERSION}.tar.gz"
           curl --fail --location --retry 3 "$URL" --output /tmp/asterisk.tar.gz
-          curl --fail --location "$URL.sha256" --output /tmp/asterisk.sha256
-          EXPECTED="$(awk 'NR==1 {print $1}' /tmp/asterisk.sha256)"
-          test "${#EXPECTED}" -eq 64
+          EXPECTED=f8b2ba98aac6c4ff3376bc0a2868bea6ed577ca684efb7ec739ae6e8ce6e35e2
           printf '%s  %s\n' "$EXPECTED" /tmp/asterisk.tar.gz | sha256sum --check
           mkdir -p /usr/src/tomos
           tar -xzf /tmp/asterisk.tar.gz -C /usr/src/tomos

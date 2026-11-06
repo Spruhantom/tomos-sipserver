@@ -14,7 +14,7 @@ Clone this repository on a clean Debian 13 host, then run:
 sudo ./install.sh
 ```
 
-The installer builds the pinned Asterisk 22.12.0 LTS source release because Debian 13 stable does not currently publish the Asterisk PBX package. It verifies the source archive against the SHA-256 file from the official Asterisk download site before compiling.
+The installer builds the pinned Asterisk 22.12.0 LTS source release because Debian 13 stable does not currently publish the Asterisk PBX package. It verifies the source archive against the SHA-256 digest published with the official Asterisk 22.12.0 GitHub release before compiling.
 
 It then:
 - Installs build dependencies and compiles Asterisk with bundled PJProject.
