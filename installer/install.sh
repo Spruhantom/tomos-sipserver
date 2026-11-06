@@ -51,6 +51,15 @@ log "Configuring and compiling Asterisk ${ASTERISK_VERSION} with bundled PJProje
 make menuselect.makeopts
 make -j"$BUILD_JOBS"
 make install
+
+install -d -m 0750 /etc/asterisk/tomos-backups
+BACKUP_DIR="/etc/asterisk/tomos-backups/$(date -u +%Y%m%dT%H%M%SZ)"
+install -d -m 0750 "$BACKUP_DIR"
+for name in asterisk.conf modules.conf logger.conf rtp.conf pjsip.conf extensions.conf; do
+  if [[ -f "/etc/asterisk/$name" ]]; then cp -a "/etc/asterisk/$name" "$BACKUP_DIR/$name"; fi
+done
+log "Existing Asterisk configuration backed up to $BACKUP_DIR."
+
 make samples
 make config
 ldconfig
@@ -61,14 +70,6 @@ if ! id asterisk >/dev/null 2>&1; then
 fi
 install -d -o asterisk -g asterisk -m 0750 /var/lib/asterisk /var/log/asterisk /var/spool/asterisk /var/spool/asterisk/voicemail /var/lib/asterisk/agi-bin
 install -d -o asterisk -g asterisk -m 0755 /run/asterisk
-install -d -m 0750 /etc/asterisk/tomos-backups
-BACKUP_DIR="/etc/asterisk/tomos-backups/$(date -u +%Y%m%dT%H%M%SZ)"
-install -d -m 0750 "$BACKUP_DIR"
-for name in asterisk.conf modules.conf logger.conf rtp.conf pjsip.conf extensions.conf; do
-  if [[ -f "/etc/asterisk/$name" ]]; then cp -a "/etc/asterisk/$name" "$BACKUP_DIR/$name"; fi
-done
-log "Existing Asterisk configuration backed up to $BACKUP_DIR."
-
 install -m 0644 "$REPO_ROOT/asterisk/asterisk.conf" /etc/asterisk/asterisk.conf
 install -m 0644 "$REPO_ROOT/asterisk/modules.conf" /etc/asterisk/modules.conf
 install -m 0644 "$REPO_ROOT/asterisk/logger.conf" /etc/asterisk/logger.conf

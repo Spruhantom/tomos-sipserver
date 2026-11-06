@@ -60,6 +60,8 @@ jobs:
           make samples
       - name: Configure TomOS test extensions
         run: |
+          groupadd --system asterisk || true
+          useradd --system --gid asterisk --home-dir /var/lib/asterisk --create-home --shell /usr/sbin/nologin asterisk || true
           install -d -o asterisk -g asterisk -m 0750 /var/lib/asterisk /var/log/asterisk /var/spool/asterisk /run/asterisk
           install -m 0644 asterisk/asterisk.conf /etc/asterisk/asterisk.conf
           install -m 0644 asterisk/modules.conf /etc/asterisk/modules.conf
