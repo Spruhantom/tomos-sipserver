@@ -10,7 +10,7 @@ die() { printf '[TomOS SIP] ERROR: %s\n' "$*" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
-for required in scripts/render-config.py scripts/tomos-sipserver-check systemd/asterisk.service systemd/tomos-sipserver.service asterisk/asterisk.conf asterisk/modules.conf asterisk/logger.conf asterisk/rtp.conf; do
+for required in scripts/render-config.py scripts/tomos-sipserver-check scripts/tomos-sipserver-apply-config tomos_sipserver/api.py tomos_sipserver/db.py requirements.txt systemd/asterisk.service systemd/tomos-sipserver.service systemd/tomos-sipserver-api.service sudoers/tomos-sipserver-api asterisk/asterisk.conf asterisk/modules.conf asterisk/logger.conf asterisk/rtp.conf; do
   [[ -f "$REPO_ROOT/$required" ]] || die "Missing project file: $required (use a complete repository checkout)."
 done
 
@@ -24,9 +24,9 @@ SOURCE_DIR="$BUILD_ROOT/asterisk-${ASTERISK_VERSION}"
 BUILD_JOBS="${TOMOS_BUILD_JOBS:-2}"
 [[ "$BUILD_JOBS" =~ ^[1-9][0-9]?$ ]] || die "TOMOS_BUILD_JOBS must be a positive integer from 1 to 99."
 
-log "Installing Asterisk build dependencies."
+log "Installing Asterisk and API dependencies."
 apt-get update
-apt-get install -y --no-install-recommends build-essential git wget curl ca-certificates pkg-config python3 openssl \
+apt-get install -y --no-install-recommends build-essential git wget curl ca-certificates pkg-config python3 python3-venv sudo openssl \
   libxml2-dev libncurses-dev uuid-dev libsqlite3-dev libssl-dev libedit-dev libjansson-dev \
   libcurl4-openssl-dev libnewt-dev libspandsp-dev libsrtp2-dev
 
@@ -67,13 +67,46 @@ if ! id asterisk >/dev/null 2>&1; then
 fi
 install -d -o asterisk -g asterisk -m 0750 /var/lib/asterisk /var/log/asterisk /var/spool/asterisk /var/spool/asterisk/voicemail /var/lib/asterisk/agi-bin
 install -d -o asterisk -g asterisk -m 0755 /run/asterisk
+
+# Install the unprivileged API and its fixed-purpose root configuration helper.
+if ! id tomos >/dev/null 2>&1; then
+  useradd --system --home-dir /var/lib/tomos-sipserver --create-home --shell /usr/sbin/nologin tomos
+fi
+install -d -o tomos -g tomos -m 0700 /var/lib/tomos-sipserver
+install -d -o root -g root -m 0755 /opt/tomos-sipserver/app
+rm -rf /opt/tomos-sipserver/app/tomos_sipserver
+cp -a "$REPO_ROOT/tomos_sipserver" /opt/tomos-sipserver/app/
+install -m 0644 "$REPO_ROOT/scripts/render-config.py" /opt/tomos-sipserver/app/render-config.py
+chown -R root:root /opt/tomos-sipserver
+python3 -m venv /opt/tomos-sipserver/venv
+/opt/tomos-sipserver/venv/bin/pip install --disable-pip-version-check --requirement "$REPO_ROOT/requirements.txt"
+
+EXT100_SECRET="$(openssl rand -hex 24)"
+EXT101_SECRET="$(openssl rand -hex 24)"
+/opt/tomos-sipserver/venv/bin/python -m tomos_sipserver.db --database /var/lib/tomos-sipserver/extensions.db \
+  --seed-extension "100:$EXT100_SECRET" --seed-extension "101:$EXT101_SECRET"
+# Keep existing credentials on upgrades so the database and active SIP config stay aligned.
+EXT100_SECRET="$(/opt/tomos-sipserver/venv/bin/python -c "import sqlite3; print(sqlite3.connect('/var/lib/tomos-sipserver/extensions.db').execute('SELECT password FROM extensions WHERE extension=?', ('100',)).fetchone()[0])")"
+EXT101_SECRET="$(/opt/tomos-sipserver/venv/bin/python -c "import sqlite3; print(sqlite3.connect('/var/lib/tomos-sipserver/extensions.db').execute('SELECT password FROM extensions WHERE extension=?', ('101',)).fetchone()[0])")"
+chown tomos:tomos /var/lib/tomos-sipserver/extensions.db
+chmod 0600 /var/lib/tomos-sipserver/extensions.db
+
+install -d -o root -g tomos -m 0750 /etc/tomos-sipserver
+API_TOKEN="$(openssl rand -hex 32)"
+printf 'TOMOS_API_TOKEN=%s\n' "$API_TOKEN" > /etc/tomos-sipserver/api.env
+chown root:tomos /etc/tomos-sipserver/api.env
+chmod 0640 /etc/tomos-sipserver/api.env
+printf '%s\n' "$API_TOKEN" > /root/tomos-sip-api-token.txt
+chmod 0600 /root/tomos-sip-api-token.txt
+install -D -o root -g root -m 0755 "$REPO_ROOT/scripts/tomos-sipserver-apply-config" /usr/local/sbin/tomos-sipserver-apply-config
+install -D -o root -g root -m 0440 "$REPO_ROOT/sudoers/tomos-sipserver-api" /etc/sudoers.d/tomos-sipserver-api
+visudo -cf /etc/sudoers.d/tomos-sipserver-api
+install -D -m 0644 "$REPO_ROOT/systemd/tomos-sipserver-api.service" /etc/systemd/system/tomos-sipserver-api.service
+
 install -m 0644 "$REPO_ROOT/asterisk/asterisk.conf" /etc/asterisk/asterisk.conf
 install -m 0644 "$REPO_ROOT/asterisk/modules.conf" /etc/asterisk/modules.conf
 install -m 0644 "$REPO_ROOT/asterisk/logger.conf" /etc/asterisk/logger.conf
 install -m 0644 "$REPO_ROOT/asterisk/rtp.conf" /etc/asterisk/rtp.conf
-
-EXT100_SECRET="$(openssl rand -hex 24)"
-EXT101_SECRET="$(openssl rand -hex 24)"
 python3 "$REPO_ROOT/scripts/render-config.py" --output-dir /etc/asterisk \
   --extension "100:$EXT100_SECRET" --extension "101:$EXT101_SECRET"
 chown root:asterisk /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
@@ -94,6 +127,7 @@ if ! systemctl is-active --quiet asterisk.service; then
 fi
 systemctl enable --now tomos-sipserver.service
 /usr/local/sbin/tomos-sipserver-check
+systemctl enable --now tomos-sipserver-api.service
 
 CREDENTIAL_FILE=/root/tomos-sip-credentials.txt
 umask 077
@@ -107,7 +141,9 @@ umask 077
 } > "$CREDENTIAL_FILE"
 chmod 0600 "$CREDENTIAL_FILE"
 
-log "Installation completed. Asterisk ${ASTERISK_VERSION} is running."
+log "Installation completed. Asterisk ${ASTERISK_VERSION} and the extension API are running."
 log "Initial SIP credentials saved to $CREDENTIAL_FILE (root-only)."
+log "API bearer token saved to /root/tomos-sip-api-token.txt (root-only)."
+log "Extension API listens on 127.0.0.1:8000; use a trusted HTTPS reverse proxy for remote administration."
 log "SIP: UDP 5060; RTP: UDP 10000-20000. Restrict access to your trusted LAN/VPN."
-log "No router port forwarding, public SIP exposure, SIP trunk or web interface has been configured."
+log "No router port forwarding, public SIP exposure or SIP trunk has been configured."

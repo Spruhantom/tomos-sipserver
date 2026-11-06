@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+cd /opt/tomos-sipserver/app
+exec /opt/tomos-sipserver/venv/bin/python -m tomos_sipserver.apply_config

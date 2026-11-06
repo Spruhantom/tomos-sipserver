@@ -1,0 +1,30 @@
+[Unit]
+Description=TomOS SIP Server Extension Management API
+Documentation=https://github.com/Spruhantom/tomos-sipserver
+Requires=asterisk.service
+After=network-online.target asterisk.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tomos
+Group=tomos
+WorkingDirectory=/opt/tomos-sipserver/app
+EnvironmentFile=/etc/tomos-sipserver/api.env
+Environment=TOMOS_DB_PATH=/var/lib/tomos-sipserver/extensions.db
+ExecStart=/opt/tomos-sipserver/venv/bin/uvicorn tomos_sipserver.api:create_app --factory --host 127.0.0.1 --port 8000 --workers 1
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/tomos-sipserver /etc/asterisk /run/asterisk
+
+[Install]
+WantedBy=multi-user.target
