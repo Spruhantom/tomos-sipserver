@@ -1,6 +1,7 @@
 """Authenticated FastAPI extension-management API for TomOS SIP Server."""
 from __future__ import annotations
 
+import hashlib
 import hmac
 import os
 import re
@@ -14,7 +15,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from fastapi import Depends, FastAPI, HTTPException, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -22,7 +25,13 @@ from .db import DEFAULT_DB, connect, initialize_database
 
 EXTENSION_PATTERN = r"^[1-9][0-9]{2,5}$"
 PASSWORD_PATTERN = r"^[A-Za-z0-9._~-]{24,128}$"
+SESSION_MAX_AGE = 28800
 security = HTTPBearer(auto_error=False)
+
+
+class DashboardLogin(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    password: str = Field(min_length=1, max_length=256)
 
 
 class ExtensionCreate(BaseModel):
@@ -74,6 +83,8 @@ def create_app(
     database_path: str | Path | None = None,
     api_token: str | None = None,
     apply_callback: Callable[[], None] | None = None,
+    admin_password: str | None = None,
+    static_dir: str | Path | None = None,
 ) -> FastAPI:
     db_path = Path(database_path or os.environ.get("TOMOS_DB_PATH", str(DEFAULT_DB)))
     token = api_token if api_token is not None else os.environ.get("TOMOS_API_TOKEN", "")
@@ -81,6 +92,11 @@ def create_app(
         raise RuntimeError("TOMOS_API_TOKEN must be configured with at least 32 characters")
     initialize_database(db_path)
     apply = apply_callback or _apply_config
+    admin_secret = admin_password if admin_password is not None else os.environ.get("TOMOS_ADMIN_PASSWORD", "")
+    if len(admin_secret) < 24:
+        raise RuntimeError("TOMOS_ADMIN_PASSWORD must be configured with at least 24 characters")
+    cookie_secure = os.environ.get("TOMOS_COOKIE_SECURE", "false").lower() in {"1", "true", "yes"}
+    dashboard_dir = Path(static_dir or os.environ.get("TOMOS_DASHBOARD_DIR", "/opt/tomos-sipserver/app/dashboard"))
     mutation_lock = threading.RLock()
     app = FastAPI(
         title="TomOS SIP Server API",
@@ -90,10 +106,31 @@ def create_app(
         redoc_url=None,
     )
 
-    def require_token(credentials: HTTPAuthorizationCredentials | None = Depends(security)) -> None:
+    def valid_session(request: Request, check_csrf: bool = False) -> bool:
+        raw = request.cookies.get("tomos_session", "")
+        try:
+            issued, csrf, signature = raw.split(".", 2)
+            signed = f"{issued}.{csrf}"
+            expected = hmac.new(token.encode(), signed.encode(), hashlib.sha256).hexdigest()
+            age = int(datetime.now(timezone.utc).timestamp()) - int(issued)
+            if age < 0 or age > SESSION_MAX_AGE or not hmac.compare_digest(signature, expected):
+                return False
+            if check_csrf:
+                header = request.headers.get("x-tomos-csrf", "")
+                cookie = request.cookies.get("tomos_csrf", "")
+                if not header or not cookie or not hmac.compare_digest(header, csrf) or not hmac.compare_digest(cookie, csrf):
+                    return False
+            return True
+        except (ValueError, TypeError):
+            return False
+
+    def require_token(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(security)) -> None:
         supplied = credentials.credentials if credentials and credentials.scheme.lower() == "bearer" else ""
-        if not supplied or not hmac.compare_digest(supplied, token):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing API token", headers={"WWW-Authenticate": "Bearer"})
+        if supplied and hmac.compare_digest(supplied, token):
+            return
+        if valid_session(request, check_csrf=request.method not in {"GET", "HEAD", "OPTIONS"}):
+            return
+        raise HTTPException(status_code=401, detail="Login required or session expired", headers={"WWW-Authenticate": "Bearer"})
 
     def mutate(operation: Callable[[sqlite3.Connection], object]):
         with mutation_lock:
@@ -119,6 +156,35 @@ def create_app(
     @app.get("/health", tags=["health"])
     def health() -> dict:
         return {"status": "ok", "service": "tomos-sipserver-api"}
+
+    @app.post("/api/v1/auth/login", tags=["authentication"])
+    def dashboard_login(payload: DashboardLogin, response: Response):
+        if not hmac.compare_digest(payload.password, admin_secret):
+            raise HTTPException(status_code=401, detail="Invalid password")
+        issued = str(int(datetime.now(timezone.utc).timestamp()))
+        csrf = secrets.token_urlsafe(24)
+        signed = f"{issued}.{csrf}"
+        signature = hmac.new(token.encode(), signed.encode(), hashlib.sha256).hexdigest()
+        response.set_cookie("tomos_session", f"{signed}.{signature}", max_age=SESSION_MAX_AGE, httponly=True, secure=cookie_secure, samesite="strict", path="/")
+        response.set_cookie("tomos_csrf", csrf, max_age=SESSION_MAX_AGE, httponly=False, secure=cookie_secure, samesite="strict", path="/")
+        return {"authenticated": True, "expires_in": SESSION_MAX_AGE}
+
+    @app.post("/api/v1/auth/logout", tags=["authentication"])
+    def dashboard_logout(response: Response):
+        response.delete_cookie("tomos_session", path="/", secure=cookie_secure, httponly=True, samesite="strict")
+        response.delete_cookie("tomos_csrf", path="/", secure=cookie_secure, samesite="strict")
+        return {"authenticated": False}
+
+    @app.get("/api/v1/auth/session", tags=["authentication"])
+    def dashboard_session(request: Request):
+        return {"authenticated": valid_session(request)}
+
+    @app.get("/api/v1/dashboard/summary", dependencies=[Depends(require_token)], tags=["dashboard"])
+    def dashboard_summary():
+        with connect(db_path) as connection:
+            total = connection.execute("SELECT COUNT(*) FROM extensions").fetchone()[0]
+            enabled = connection.execute("SELECT COUNT(*) FROM extensions WHERE enabled = 1").fetchone()[0]
+        return {"api": "online", "asterisk": "not_checked", "extensions_total": total, "extensions_enabled": enabled}
 
     @app.get("/api/v1/extensions", response_model=list[ExtensionView], dependencies=[Depends(require_token)])
     def list_extensions():
@@ -204,5 +270,15 @@ def create_app(
     @app.post("/api/v1/extensions/{extension}/disable", dependencies=[Depends(require_token)])
     def disable_extension(extension: str):
         return update_extension(extension, ExtensionUpdate(enabled=False))
+
+    if dashboard_dir.is_dir():
+        app.mount("/dashboard", StaticFiles(directory=dashboard_dir, html=True), name="dashboard")
+
+    @app.get("/", include_in_schema=False)
+    def dashboard_root():
+        index = dashboard_dir / "index.html"
+        if not index.is_file():
+            raise HTTPException(status_code=404, detail="Dashboard assets are not installed")
+        return FileResponse(index)
 
     return app
