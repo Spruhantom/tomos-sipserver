@@ -48,7 +48,7 @@ jobs:
           URL="https://github.com/asterisk/asterisk/releases/download/${VERSION}/asterisk-${VERSION}.tar.gz"
           curl --fail --location --retry 3 "$URL" --output /tmp/asterisk.tar.gz
           EXPECTED=f8b2ba98aac6c4ff3376bc0a2868bea6ed577ca684efb7ec739ae6e8ce6e35e2
-          printf '%s  %s\n' "$EXPECTED" /tmp/asterisk.tar.gz | sha256sum --check
+          printf '%s  %s\\n' "$EXPECTED" /tmp/asterisk.tar.gz | sha256sum --check
           mkdir -p /usr/src/tomos
           tar -xzf /tmp/asterisk.tar.gz -C /usr/src/tomos
       - name: Install Asterisk-specific prerequisites
@@ -82,22 +82,29 @@ jobs:
           chown root:asterisk /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
           chmod 0640 /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
       - name: Start Asterisk and verify PJSIP endpoints and dialplan
+        shell: bash
         run: |
+          set -Eeuo pipefail
           asterisk -f -U asterisk -G asterisk &
           ASTERISK_PID=$!
-          cleanup() { asterisk -rx 'core stop now' >/dev/null 2>&1 || kill "$ASTERISK_PID" 2>/dev/null || true; }
+          cleanup() {
+            asterisk -rx 'core stop now' >/dev/null 2>&1 || kill "$ASTERISK_PID" 2>/dev/null || true
+          }
           trap cleanup EXIT
           READY=0
           for attempt in $(seq 1 30); do
             if asterisk -rx 'core show version' >/dev/null 2>&1; then READY=1; break; fi
             sleep 1
           done
-          test "$READY" -eq 1
+          if [[ "$READY" -ne 1 ]]; then
+            echo "Asterisk did not become ready within 30 seconds" >&2
+            exit 1
+          fi
           ENDPOINTS="$(asterisk -rx 'pjsip show endpoints')"
-          printf '%s\n' "$ENDPOINTS"
+          printf '%s\\n' "$ENDPOINTS"
           grep -Fq '100/100' <<<"$ENDPOINTS"
           grep -Fq '101/101' <<<"$ENDPOINTS"
           DIALPLAN="$(asterisk -rx 'dialplan show tomos-internal')"
-          printf '%s\n' "$DIALPLAN"
+          printf '%s\\n' "$DIALPLAN"
           grep -Fq '100' <<<"$DIALPLAN"
           grep -Fq '101' <<<"$DIALPLAN"
