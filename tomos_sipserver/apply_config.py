@@ -53,7 +53,7 @@ def apply(reload_asterisk: bool = True) -> None:
                 mac=str(mac), model=str(model), extension=str(extension),
                 display_name=str(display_name), server_host=str(server_host),
             ),
-            render_phone_xml(mac=str(mac), server_host=str(server_host)),
+            render_phone_xml(mac=str(mac), model=str(model), server_host=str(server_host)),
         )
         for mac, model, server_host, extension, display_name in cisco_rows
     }
