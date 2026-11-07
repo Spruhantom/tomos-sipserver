@@ -85,6 +85,13 @@ jobs:
           python3 scripts/render-config.py --output-dir /etc/asterisk \
             --extension "100:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
             --extension "101:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          cat >> /etc/asterisk/extensions.conf <<'EOF'
+          [tomos-cdr-test]
+          exten => 900,1,Set(CALLERID(num)=100)
+           same => n,Answer()
+           same => n,Wait(1)
+           same => n,Hangup()
+          EOF
           chown root:asterisk /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
           chmod 0640 /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
       - name: Prepare API integration environment
@@ -136,11 +143,24 @@ jobs:
           asterisk -rx 'cdr show status'
           grep -Fq 'cdr_sqlite3_custom.so' <<<"$(asterisk -rx 'module show like cdr_sqlite3_custom')"
           test -f /var/lib/tomos-sipserver/cdr/cdr.db
-          python3 - <<'PY'
+          asterisk -rx 'dialplan reload'
+          asterisk -rx 'channel originate Local/900@tomos-cdr-test application Wait 1'
+          CDR_READY=0
+          for attempt in $(seq 1 15); do
+            if python3 - <<'PY'
           import sqlite3
           db = sqlite3.connect("file:/var/lib/tomos-sipserver/cdr/cdr.db?mode=ro", uri=True)
-          assert db.execute("SELECT COUNT(*) FROM cdr").fetchone()[0] == 0
+          row = db.execute("SELECT src, dst, disposition FROM cdr WHERE dst = '900' ORDER BY calldate DESC LIMIT 1").fetchone()
+          raise SystemExit(0 if row and row[2] == "ANSWERED" else 1)
           PY
+            then CDR_READY=1; break; fi
+            sleep 1
+          done
+          if [[ "$CDR_READY" -ne 1 ]]; then
+            echo "Asterisk did not write the expected answered test CDR" >&2
+            sqlite3 /var/lib/tomos-sipserver/cdr/cdr.db 'SELECT calldate,src,dst,disposition FROM cdr;' || true
+            exit 1
+          fi
           printf '%s\n' "$ENDPOINTS"
           grep -Fq '100/100' <<<"$ENDPOINTS"
           grep -Fq '101/101' <<<"$ENDPOINTS"
@@ -168,7 +188,9 @@ jobs:
           DASH_STATUS="$(curl --fail --silent --show-error http://127.0.0.1:8000/api/v1/dashboard/status -H "Authorization: Bearer $API_TOKEN")"
           grep -Fq '"status":"online"' <<<"$DASH_STATUS"
           CALL_HISTORY="$(curl --fail --silent --show-error http://127.0.0.1:8000/api/v1/calls -H "Authorization: Bearer $API_TOKEN")"
-          grep -Fq '"total":0' <<<"$CALL_HISTORY"
+          grep -Fq '"total":1' <<<"$CALL_HISTORY"
+          grep -Fq '"destination":"900"' <<<"$CALL_HISTORY"
+          grep -Fq '"disposition":"ANSWERED"' <<<"$CALL_HISTORY"
           AUTH_HEADER="Authorization: Bearer $API_TOKEN"
           CREATED="$(curl --fail --silent --show-error -X POST http://127.0.0.1:8000/api/v1/extensions \
             -H "$AUTH_HEADER" -H 'Content-Type: application/json' \

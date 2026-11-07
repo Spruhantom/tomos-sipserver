@@ -85,5 +85,5 @@ Each mutation regenerates PJSIP and dialplan configuration and requests an Aster
 
 ## Tests
 
-GitHub Actions runs Python renderer and API tests, Bash syntax/ShellCheck checks, and a Debian 13 job that downloads and verifies the pinned Asterisk source, compiles it, starts the PBX process, verifies PJSIP endpoints and dialplan, checks that the SQLite CDR backend creates its database, and exercises the authenticated call-history endpoint. This does not yet prove two-way audio between physical phones or call records from physical handsets.
+GitHub Actions runs Python renderer and API tests, Bash syntax/ShellCheck checks, and a Debian 13 job that downloads and verifies the pinned Asterisk source, compiles it, starts the PBX process, verifies PJSIP endpoints and dialplan, checks that the SQLite CDR backend records a generated answered Asterisk call, and verifies that record through the authenticated call-history API. This does not yet prove two-way audio between physical phones or call records from physical handsets.
 

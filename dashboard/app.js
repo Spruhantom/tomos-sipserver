@@ -1,6 +1,8 @@
 const $=s=>document.querySelector(s);
 let csrf='';
 let callFilters={};
+let callOffset=0;
+const callPageSize=50;
 const api=async(path,opt={})=>{
   const h={'Content-Type':'application/json',...(opt.headers||{})};
   if(csrf&&opt.method&&opt.method!=='GET')h['X-Tomos-CSRF']=csrf;
@@ -14,12 +16,16 @@ function showApp(){$('#login').hidden=true;$('#app').hidden=false;$('#logout').h
 function note(s){const n=$('#notice');n.textContent=s;n.style.display='block';setTimeout(()=>n.style.display='none',3200)}
 function cookie(n){return document.cookie.split('; ').find(x=>x.startsWith(n+'='))?.split('=').slice(1).join('=')||''}
 function secret(s){$('#secret-value').textContent=s;$('#secret-dialog').showModal()}
-function queryForCalls(){const p=new URLSearchParams({limit:'50'});for(const [k,v] of Object.entries(callFilters))if(v)p.set(k,v);return p.toString()}
+function queryForCalls(){const p=new URLSearchParams({limit:String(callPageSize),offset:String(callOffset)});for(const [k,v] of Object.entries(callFilters))if(v)p.set(k,v);return p.toString()}
 async function loadCalls(){
   const history=await api('/calls?'+queryForCalls());
   $('#calls').replaceChildren();
   $('#calls-empty').hidden=history.calls.length>0;
-  $('#calls-summary').textContent=history.total+' matching record'+(history.total===1?'':'s')+' · showing '+history.calls.length;
+  const first=history.total?history.offset+1:0, last=history.offset+history.calls.length;
+  $('#calls-summary').textContent=history.total+' matching record'+(history.total===1?'':'s')+' · showing '+first+'–'+last;
+  $('#calls-page').textContent=history.total?`Page ${Math.floor(history.offset/history.limit)+1} of ${Math.ceil(history.total/history.limit)}`:'Page 0 of 0';
+  $('#calls-prev').disabled=history.offset===0;
+  $('#calls-next').disabled=history.offset+history.limit>=history.total;
   for(const call of history.calls){
     const tr=document.createElement('tr');
     for(const value of [call.started_at,call.caller_id,call.source,call.destination,call.duration_seconds+'s',call.disposition]){
@@ -63,12 +69,15 @@ async function refresh(){
 $('#call-filters').onsubmit=async e=>{
   e.preventDefault();
   callFilters={start_date:$('#call-start').value,end_date:$('#call-end').value,number:$('#call-number').value.trim(),disposition:$('#call-disposition').value};
+  callOffset=0;
   try{await loadCalls()}catch(err){note(err.message)}
 };
 $('#clear-call-filters').onclick=async()=>{
-  $('#call-filters').reset();callFilters={};
+  $('#call-filters').reset();callFilters={};callOffset=0;
   try{await loadCalls()}catch(err){note(err.message)}
 };
+$('#calls-prev').onclick=async()=>{callOffset=Math.max(0,callOffset-callPageSize);try{await loadCalls()}catch(err){note(err.message)}};
+$('#calls-next').onclick=async()=>{callOffset+=callPageSize;try{await loadCalls()}catch(err){note(err.message)}};
 $('#export-calls').onclick=async()=>{
   const query=new URLSearchParams();for(const [k,v] of Object.entries(callFilters))if(v)query.set(k,v);
   try{
