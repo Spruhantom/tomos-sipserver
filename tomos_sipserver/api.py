@@ -260,17 +260,15 @@ def create_app(
                 raise HTTPException(status_code=429, detail="Too many login attempts. Try again later.",
                                     headers={"Retry-After": str(retry_after)})
             login_attempts[client_ip] = attempts
+            if not hmac.compare_digest(payload.password, admin_secret):
+                login_attempts[client_ip].append(now)
+                raise HTTPException(status_code=401, detail="Invalid password")
+            login_attempts.pop(client_ip, None)
             if len(login_attempts) > 1024:
                 expired = [address for address, stamps in login_attempts.items()
                            if not stamps or now - stamps[-1] >= login_window_seconds]
                 for address in expired:
                     login_attempts.pop(address, None)
-        if not hmac.compare_digest(payload.password, admin_secret):
-            with login_lock:
-                login_attempts.setdefault(client_ip, []).append(now)
-            raise HTTPException(status_code=401, detail="Invalid password")
-        with login_lock:
-            login_attempts.pop(client_ip, None)
         issued = str(int(datetime.now(timezone.utc).timestamp()))
         csrf = secrets.token_urlsafe(24)
         signed = f"{issued}.{csrf}"
