@@ -41,7 +41,7 @@ class YealinkProvisioningApiTests(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["mac"], "001565AABBCC")
         self.assertEqual(body["extension"], "125")
-        self.assertEqual(body["provisioning_path"], "/provisioning/yealink/001565AABBCC.cfg")
+        self.assertEqual(body["provisioning_path"], "/provisioning/yealink/001565aabbcc.cfg")
         self.assertTrue(body["password_displayed_once"])
         self.assertNotIn("provisioning_password_hash", body)
         listed = self.client.get("/api/v1/devices/yealink", headers=self.headers)
@@ -59,6 +59,7 @@ class YealinkProvisioningApiTests(unittest.TestCase):
             registered["provisioning_username"], registered["provisioning_password"]
         ))
         self.assertEqual(valid.status_code, 200, valid.text)
+        self.assertTrue(valid.text.startswith("#!version:1.0.0.1\n"))
         self.assertIn("account.1.user_name = 125", valid.text)
         self.assertIn("account.1.password = " + self.sip_password, valid.text)
         self.assertIn("account.1.sip_server.1.address = 192.168.1.10", valid.text)
@@ -76,6 +77,7 @@ class YealinkProvisioningApiTests(unittest.TestCase):
     def test_invalid_or_duplicate_devices_are_rejected(self):
         self.assertEqual(self.register(mac="not-a-mac").status_code, 422)
         self.assertEqual(self.register(server_host="https://pbx.home").status_code, 422)
+        self.assertEqual(self.register(model="SIP-T46U-FAKE").status_code, 422)
         self.assertEqual(self.register().status_code, 201)
         self.assertEqual(self.register().status_code, 409)
 
@@ -92,6 +94,32 @@ class YealinkProvisioningApiTests(unittest.TestCase):
             auth=(registered["provisioning_username"], registered["provisioning_password"]),
         )
         self.assertEqual(response.status_code, 410)
+
+    def test_rotating_device_credentials_revokes_previous_secret(self):
+        registered = self.register().json()
+        path = registered["provisioning_path"]
+        rotated = self.client.post(
+            "/api/v1/devices/yealink/00:15:65:aa:bb:cc/credentials",
+            headers=self.headers,
+        )
+        self.assertEqual(rotated.status_code, 200, rotated.text)
+        replacement = rotated.json()
+        self.assertTrue(replacement["password_displayed_once"])
+        self.assertNotEqual(replacement["provisioning_password"], registered["provisioning_password"])
+        old_access = self.client.get(
+            path, auth=(registered["provisioning_username"], registered["provisioning_password"])
+        )
+        self.assertEqual(old_access.status_code, 401)
+        new_access = self.client.get(
+            path, auth=(replacement["provisioning_username"], replacement["provisioning_password"])
+        )
+        self.assertEqual(new_access.status_code, 200)
+
+    def test_rotate_unknown_device_returns_not_found(self):
+        response = self.client.post(
+            "/api/v1/devices/yealink/001122334455/credentials", headers=self.headers
+        )
+        self.assertEqual(response.status_code, 404)
 
     def test_device_delete_revokes_provisioning_access(self):
         registered = self.register().json()
