@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import json
 import hmac
 import os
 import re
@@ -124,6 +125,20 @@ class PolycomDeviceCreate(BaseModel):
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _record_audit(connection: sqlite3.Connection, actor: dict, action: str,
+                  target_user_id: int | None = None, target_username: str | None = None,
+                  details: dict | None = None) -> None:
+    """Append a password-free account audit event in the caller's transaction."""
+    connection.execute(
+        """INSERT INTO audit_events
+           (occurred_at, actor_user_id, actor_username, action, target_user_id,
+            target_username, details_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (_utc_now(), actor.get("id"), actor.get("username", "unknown"), action,
+         target_user_id, target_username, json.dumps(details or {}, sort_keys=True)),
+    )
 
 
 def _view(row: sqlite3.Row) -> dict:
@@ -387,6 +402,8 @@ def create_app(
             with connect(db_path) as connection:
                 cursor = connection.execute("INSERT INTO admin_users(username, password_hash, role, enabled, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)", (payload.username, hash_password(payload.password), payload.role, now, now))
                 user_id = cursor.lastrowid
+                _record_audit(connection, principal, "user.created", user_id, payload.username,
+                              {"role": payload.role, "enabled": True})
         except sqlite3.IntegrityError as error:
             raise HTTPException(status_code=409, detail="Username already exists") from error
         return {"id": user_id, "username": payload.username, "role": payload.role, "enabled": True}
@@ -397,7 +414,7 @@ def create_app(
         if not changes or any(value is None for value in changes.values()):
             raise HTTPException(status_code=422, detail="Provide a non-null role or enabled value")
         with connect(db_path) as connection:
-            target = connection.execute("SELECT id, role, enabled FROM admin_users WHERE id = ?", (user_id,)).fetchone()
+            target = connection.execute("SELECT id, username, role, enabled FROM admin_users WHERE id = ?", (user_id,)).fetchone()
             if target is None:
                 raise HTTPException(status_code=404, detail="User not found")
             next_role = changes.get("role", target["role"])
@@ -407,6 +424,13 @@ def create_app(
                 if remaining == 0:
                     raise HTTPException(status_code=409, detail="Cannot disable or demote the last active administrator")
             connection.execute("UPDATE admin_users SET role = ?, enabled = ?, updated_at = ? WHERE id = ?", (next_role, int(next_enabled), _utc_now(), user_id))
+            if next_role != target["role"]:
+                _record_audit(connection, principal, "user.role_changed", user_id, target["username"],
+                              {"from": target["role"], "to": next_role})
+            if bool(next_enabled) != bool(target["enabled"]):
+                _record_audit(connection, principal, "user.enabled" if next_enabled else "user.disabled",
+                              user_id, target["username"],
+                              {"from": bool(target["enabled"]), "to": bool(next_enabled)})
             row = connection.execute("SELECT id, username, role, enabled FROM admin_users WHERE id = ?", (user_id,)).fetchone()
         return {"id": row["id"], "username": row["username"], "role": row["role"], "enabled": bool(row["enabled"])}
 
@@ -422,15 +446,19 @@ def create_app(
                 remaining = connection.execute("SELECT COUNT(*) FROM admin_users WHERE role = ? AND enabled = 1 AND id != ?", ("admin", user_id)).fetchone()[0]
                 if remaining == 0:
                     raise HTTPException(status_code=409, detail="Cannot delete the last active administrator")
+            _record_audit(connection, principal, "user.deleted", user_id, target["username"],
+                          {"role": target["role"], "enabled": bool(target["enabled"])})
             connection.execute("DELETE FROM admin_users WHERE id = ?", (user_id,))
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post("/api/v1/users/{user_id}/password", tags=["user management"])
     def reset_user_password(user_id: int, payload: UserPasswordUpdate, principal: dict = Depends(require_admin)):
         with connect(db_path) as connection:
-            cursor = connection.execute("UPDATE admin_users SET password_hash = ?, updated_at = ? WHERE id = ?", (hash_password(payload.password), _utc_now(), user_id))
-            if cursor.rowcount == 0:
+            target = connection.execute("SELECT username FROM admin_users WHERE id = ?", (user_id,)).fetchone()
+            if target is None:
                 raise HTTPException(status_code=404, detail="User not found")
+            connection.execute("UPDATE admin_users SET password_hash = ?, updated_at = ? WHERE id = ?", (hash_password(payload.password), _utc_now(), user_id))
+            _record_audit(connection, principal, "user.password_reset", user_id, target["username"])
         return {"id": user_id, "password_updated": True}
 
     @app.post("/api/v1/auth/password", tags=["authentication"])
@@ -442,7 +470,32 @@ def create_app(
             if row is None or not verify_password(payload.old_password, row["password_hash"]):
                 raise HTTPException(status_code=400, detail="Current password is incorrect")
             connection.execute("UPDATE admin_users SET password_hash = ?, updated_at = ? WHERE id = ?", (hash_password(payload.new_password), _utc_now(), principal["id"]))
+            _record_audit(connection, principal, "user.password_changed", principal["id"], principal["username"])
         return {"password_updated": True}
+
+    @app.get("/api/v1/audit", tags=["audit log"])
+    def list_audit_events(
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0, le=1000000),
+        action: str | None = Query(default=None, min_length=3, max_length=64, pattern=r"^[a-z_.]+$"),
+        principal: dict = Depends(require_admin),
+    ):
+        """Return newest account audit events; restricted to administrators."""
+        where = " WHERE action = ?" if action else ""
+        values = [action] if action else []
+        with connect(db_path) as connection:
+            total = connection.execute("SELECT COUNT(*) FROM audit_events" + where, values).fetchone()[0]
+            rows = connection.execute(
+                "SELECT id, occurred_at, actor_user_id, actor_username, action, target_user_id, target_username, details_json FROM audit_events" +
+                where + " ORDER BY id DESC LIMIT ? OFFSET ?", [*values, limit, offset]
+            ).fetchall()
+        return {"events": [{
+            "id": row["id"], "occurred_at": row["occurred_at"],
+            "actor_user_id": row["actor_user_id"], "actor_username": row["actor_username"],
+            "action": row["action"], "target_user_id": row["target_user_id"],
+            "target_username": row["target_username"], "details": json.loads(row["details_json"]),
+        } for row in rows], "total": total, "limit": limit, "offset": offset}
+
     @app.get("/api/v1/dashboard/summary", dependencies=[Depends(require_token)], tags=["dashboard"])
     def dashboard_summary():
         with connect(db_path) as connection:
