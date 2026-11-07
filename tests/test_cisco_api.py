@@ -43,6 +43,8 @@ class CiscoInventoryApiTests(unittest.TestCase):
         self.assertEqual(body["sccp_config_status"], "generated")
         self.assertEqual(body["tftp_profile_status"], "generated")
         self.assertEqual(body["hardware_test_status"], "not_tested")
+        self.assertEqual(body["compatibility"]["profile_family"], "7940_7960")
+        self.assertEqual(body["compatibility"]["firmware_validation"], "manual_required")
         listed = self.client.get("/api/v1/devices/cisco", headers=self.headers)
         self.assertEqual(listed.status_code, 200)
         self.assertEqual(len(listed.json()), 1)
@@ -50,6 +52,7 @@ class CiscoInventoryApiTests(unittest.TestCase):
         self.assertEqual(listed.json()[0]["sccp_config_status"], "generated")
         self.assertEqual(listed.json()[0]["tftp_profile_status"], "generated")
         self.assertEqual(listed.json()[0]["hardware_test_status"], "not_tested")
+        self.assertEqual(listed.json()[0]["compatibility"]["profile_generation"], "model_specific")
 
     def test_only_initial_target_models_are_accepted(self):
         for model in ("7940", "7960", "7970"):
@@ -57,6 +60,16 @@ class CiscoInventoryApiTests(unittest.TestCase):
             self.assertEqual(response.status_code, 201, response.text)
         rejected = self.register(mac="00:15:65:aa:bb:dd", model="8841")
         self.assertEqual(rejected.status_code, 422)
+
+    def test_model_compatibility_catalog_requires_auth_and_lists_distinct_families(self):
+        self.assertEqual(self.client.get("/api/v1/devices/cisco/models").status_code, 401)
+        response = self.client.get("/api/v1/devices/cisco/models", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        models = {item["model"]: item for item in response.json()}
+        self.assertEqual(models["7940"]["profile_family"], "7940_7960")
+        self.assertEqual(models["7960"]["profile_family"], "7940_7960")
+        self.assertEqual(models["7970"]["profile_family"], "797x")
+        self.assertTrue(all(item["hardware_test_status"] == "not_tested" for item in models.values()))
 
     def test_invalid_mac_or_host_is_rejected(self):
         self.assertEqual(self.register(mac="not-a-mac").status_code, 422)
