@@ -10,7 +10,7 @@ die() { printf '[TomOS SIP] ERROR: %s\n' "$*" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
-for required in scripts/render-config.py scripts/tomos-sipserver-check scripts/tomos-sipserver-apply-config tomos_sipserver/api.py tomos_sipserver/db.py dashboard/index.html dashboard/app.js dashboard/style.css requirements.txt systemd/asterisk.service systemd/tomos-sipserver.service systemd/tomos-sipserver-api.service sudoers/tomos-sipserver-api asterisk/asterisk.conf asterisk/modules.conf asterisk/logger.conf asterisk/rtp.conf asterisk/cdr.conf asterisk/cdr_sqlite3_custom.conf asterisk/sccp.conf; do
+for required in scripts/render-config.py scripts/tomos-sipserver-check scripts/tomos-sipserver-apply-config tomos_sipserver/api.py tomos_sipserver/db.py tomos_sipserver/installer_credentials.py dashboard/index.html dashboard/app.js dashboard/style.css requirements.txt systemd/asterisk.service systemd/tomos-sipserver.service systemd/tomos-sipserver-api.service sudoers/tomos-sipserver-api asterisk/asterisk.conf asterisk/modules.conf asterisk/logger.conf asterisk/rtp.conf asterisk/cdr.conf asterisk/cdr_sqlite3_custom.conf asterisk/sccp.conf; do
   [[ -f "$REPO_ROOT/$required" ]] || die "Missing project file: $required (use a complete repository checkout)."
 done
 
@@ -35,6 +35,9 @@ if [[ -r /etc/tomos-sipserver/api.env ]]; then
 fi
 ADMIN_USERNAME="${TOMOS_ADMIN_USERNAME:-${EXISTING_ADMIN_USERNAME:-admin}}"
 ADMIN_PASSWORD="${TOMOS_ADMIN_PASSWORD:-${EXISTING_ADMIN_PASSWORD:-}}"
+ADMIN_USERNAME_CHANGED=0
+ADMIN_PASSWORD_CHANGED=0
+if [[ -n "${TOMOS_ADMIN_PASSWORD:-}" ]]; then ADMIN_PASSWORD_CHANGED=1; fi
 if [[ -r /dev/tty && -w /dev/tty ]]; then
   read -r -p "TomOS administrator username [${ADMIN_USERNAME}]: " entered_username </dev/tty
   ADMIN_USERNAME="${entered_username:-$ADMIN_USERNAME}"
@@ -46,8 +49,12 @@ if [[ -r /dev/tty && -w /dev/tty ]]; then
       printf '\n' > /dev/tty
       [[ "$entered_password" == "$confirmed_password" ]] || die "Administrator passwords do not match."
       ADMIN_PASSWORD="$entered_password"
+      ADMIN_PASSWORD_CHANGED=1
     fi
   fi
+fi
+if [[ -n "$EXISTING_ADMIN_USERNAME" && "$ADMIN_USERNAME" != "$EXISTING_ADMIN_USERNAME" ]]; then
+  ADMIN_USERNAME_CHANGED=1
 fi
 [[ "$ADMIN_USERNAME" =~ ^[A-Za-z0-9_.-]{3,32}$ ]] || die "Administrator username must be 3-32 characters: letters, numbers, dot, underscore or hyphen."
 if [[ -z "$ADMIN_PASSWORD" ]]; then
@@ -146,6 +153,22 @@ EXT101_SECRET="$(/opt/tomos-sipserver/venv/bin/python -c "import sqlite3; print(
 chown tomos:tomos /var/lib/tomos-sipserver/extensions.db
 chmod 0600 /var/lib/tomos-sipserver/extensions.db
 
+# The installer credentials bootstrap the first administrator. On upgrades,
+# explicitly entered changes must also update that account's database record.
+if [[ -n "$EXISTING_ADMIN_USERNAME" && ( "$ADMIN_USERNAME_CHANGED" -eq 1 || "$ADMIN_PASSWORD_CHANGED" -eq 1 ) ]]; then
+  credential_args=(--database /var/lib/tomos-sipserver/extensions.db
+                   --old-username "$EXISTING_ADMIN_USERNAME"
+                   --new-username "$ADMIN_USERNAME")
+  if [[ "$ADMIN_PASSWORD_CHANGED" -eq 1 ]]; then
+    credential_args+=(--update-password)
+    TOMOS_ADMIN_PASSWORD_UPDATE="$ADMIN_PASSWORD" PYTHONPATH=/opt/tomos-sipserver/app \
+      /opt/tomos-sipserver/venv/bin/python -m tomos_sipserver.installer_credentials "${credential_args[@]}"
+  else
+    PYTHONPATH=/opt/tomos-sipserver/app \
+      /opt/tomos-sipserver/venv/bin/python -m tomos_sipserver.installer_credentials "${credential_args[@]}"
+  fi
+fi
+
 install -d -o root -g tomos -m 0750 /etc/tomos-sipserver
 API_TOKEN="$(openssl rand -hex 32)"
 printf 'TOMOS_API_TOKEN=%s\nTOMOS_ADMIN_USERNAME=%s\nTOMOS_ADMIN_PASSWORD=%s\n' "$API_TOKEN" "$ADMIN_USERNAME" "$ADMIN_PASSWORD" > /etc/tomos-sipserver/api.env
@@ -154,7 +177,11 @@ chmod 0640 /etc/tomos-sipserver/api.env
 printf '%s\n' "$API_TOKEN" > /root/tomos-sip-api-token.txt
 chmod 0600 /root/tomos-sip-api-token.txt
 printf '%s\n' "$ADMIN_USERNAME" > /root/tomos-sip-dashboard-username.txt
-printf '%s\n' "$ADMIN_PASSWORD" > /root/tomos-sip-dashboard-password.txt
+if [[ -z "$EXISTING_ADMIN_USERNAME" || "$ADMIN_PASSWORD_CHANGED" -eq 1 ]]; then
+  printf '%s\n' "$ADMIN_PASSWORD" > /root/tomos-sip-dashboard-password.txt
+else
+  log "Dashboard password file left unchanged; a password changed in the dashboard cannot be recovered by the installer."
+fi
 chmod 0600 /root/tomos-sip-dashboard-username.txt /root/tomos-sip-dashboard-password.txt
 install -D -o root -g root -m 0755 "$REPO_ROOT/scripts/tomos-sipserver-apply-config" /usr/local/sbin/tomos-sipserver-apply-config
 install -D -o root -g root -m 0755 "$REPO_ROOT/scripts/tomos-sipserver-status" /usr/local/sbin/tomos-sipserver-status
@@ -205,7 +232,12 @@ chmod 0600 "$CREDENTIAL_FILE"
 log "Installation completed. Asterisk ${ASTERISK_VERSION}, extension API and call history are running."
 log "Initial SIP credentials saved to $CREDENTIAL_FILE (root-only)."
 log "API bearer token saved to /root/tomos-sip-api-token.txt (root-only)."
-log "Dashboard password saved to /root/tomos-sip-dashboard-password.txt (root-only); open http://127.0.0.1:8000/ on the server or use a trusted HTTPS reverse proxy."
+if [[ -z "$EXISTING_ADMIN_USERNAME" || "$ADMIN_PASSWORD_CHANGED" -eq 1 ]]; then
+  log "Installer bootstrap password saved to /root/tomos-sip-dashboard-password.txt (root-only)."
+else
+  log "Password file is the original installer credential only; use the current password set in the dashboard."
+fi
+log "Open http://127.0.0.1:8000/ on the server or use a trusted HTTPS reverse proxy."
 log "Extension API listens on 127.0.0.1:8000; use a trusted HTTPS reverse proxy for remote administration."
 log "SIP: UDP 5060; SCCP: TCP 2000; RTP: UDP 10000-20000. Restrict access to your trusted LAN/VPN."
 log "No router port forwarding, public SIP exposure or SIP trunk has been configured."
