@@ -119,7 +119,7 @@ $('#yealink-form').onsubmit=async e=>{
       model:$('#yealink-model').value.trim(),server_host:$('#yealink-host').value.trim()
     })});
     $('#yealink-dialog').close();
-    $('#yealink-result-url').value='https://'+location.host+device.provisioning_path;
+    $('#yealink-result-url').value='https://'+location.host+'/provisioning/yealink/';
     $('#yealink-result-user').value=device.provisioning_username;
     $('#yealink-result-password').value=device.provisioning_password;
     $('#yealink-result-dialog').showModal();
