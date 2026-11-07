@@ -56,6 +56,12 @@ class UserUpdate(BaseModel):
     role: str | None = Field(default=None, pattern=r"^(admin|operator|viewer)$")
     enabled: bool | None = None
 
+class PasswordChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    old_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=12, max_length=128)
+
+
 class UserPasswordUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     password: str = Field(min_length=12, max_length=128)
@@ -351,7 +357,7 @@ def create_app(
                     login_attempts.pop(address, None)
         issued = str(int(datetime.now(timezone.utc).timestamp()))
         csrf = secrets.token_urlsafe(24)
-        signed = f"{issued}.{row["id"]}.{csrf}"
+        signed = f"{issued}.{row[0]}.{csrf}"
         signature = hmac.new(token.encode(), signed.encode(), hashlib.sha256).hexdigest()
         response.set_cookie("tomos_session", f"{signed}.{signature}", max_age=SESSION_MAX_AGE, httponly=True, secure=cookie_secure, samesite="strict", path="/")
         response.set_cookie("tomos_csrf", csrf, max_age=SESSION_MAX_AGE, httponly=False, secure=cookie_secure, samesite="strict", path="/")
@@ -368,6 +374,75 @@ def create_app(
         principal = valid_session(request)
         return {"authenticated": principal is not None, "user": principal}
 
+    @app.get("/api/v1/users", tags=["user management"])
+    def list_users(principal: dict = Depends(require_admin)):
+        with connect(db_path) as connection:
+            rows = connection.execute("SELECT id, username, role, enabled, created_at, updated_at FROM admin_users ORDER BY username COLLATE NOCASE").fetchall()
+        return [{"id": row["id"], "username": row["username"], "role": row["role"], "enabled": bool(row["enabled"]), "created_at": row["created_at"], "updated_at": row["updated_at"]} for row in rows]
+
+    @app.post("/api/v1/users", status_code=status.HTTP_201_CREATED, tags=["user management"])
+    def create_user(payload: UserCreate, principal: dict = Depends(require_admin)):
+        now = _utc_now()
+        try:
+            with connect(db_path) as connection:
+                cursor = connection.execute("INSERT INTO admin_users(username, password_hash, role, enabled, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)", (payload.username, hash_password(payload.password), payload.role, now, now))
+                user_id = cursor.lastrowid
+        except sqlite3.IntegrityError as error:
+            raise HTTPException(status_code=409, detail="Username already exists") from error
+        return {"id": user_id, "username": payload.username, "role": payload.role, "enabled": True}
+
+    @app.patch("/api/v1/users/{user_id}", tags=["user management"])
+    def update_user(user_id: int, payload: UserUpdate, principal: dict = Depends(require_admin)):
+        changes = payload.model_dump(exclude_unset=True)
+        if not changes or any(value is None for value in changes.values()):
+            raise HTTPException(status_code=422, detail="Provide a non-null role or enabled value")
+        with connect(db_path) as connection:
+            target = connection.execute("SELECT id, role, enabled FROM admin_users WHERE id = ?", (user_id,)).fetchone()
+            if target is None:
+                raise HTTPException(status_code=404, detail="User not found")
+            next_role = changes.get("role", target["role"])
+            next_enabled = changes.get("enabled", bool(target["enabled"]))
+            if target["role"] == "admin" and target["enabled"] and (next_role != "admin" or not next_enabled):
+                remaining = connection.execute("SELECT COUNT(*) FROM admin_users WHERE role = ? AND enabled = 1 AND id != ?", ("admin", user_id)).fetchone()[0]
+                if remaining == 0:
+                    raise HTTPException(status_code=409, detail="Cannot disable or demote the last active administrator")
+            connection.execute("UPDATE admin_users SET role = ?, enabled = ?, updated_at = ? WHERE id = ?", (next_role, int(next_enabled), _utc_now(), user_id))
+            row = connection.execute("SELECT id, username, role, enabled FROM admin_users WHERE id = ?", (user_id,)).fetchone()
+        return {"id": row["id"], "username": row["username"], "role": row["role"], "enabled": bool(row["enabled"])}
+
+    @app.delete("/api/v1/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["user management"])
+    def delete_user(user_id: int, principal: dict = Depends(require_admin)):
+        if principal["id"] == user_id:
+            raise HTTPException(status_code=409, detail="You cannot delete your own account")
+        with connect(db_path) as connection:
+            target = connection.execute("SELECT id, role, enabled FROM admin_users WHERE id = ?", (user_id,)).fetchone()
+            if target is None:
+                raise HTTPException(status_code=404, detail="User not found")
+            if target["role"] == "admin" and target["enabled"]:
+                remaining = connection.execute("SELECT COUNT(*) FROM admin_users WHERE role = ? AND enabled = 1 AND id != ?", ("admin", user_id)).fetchone()[0]
+                if remaining == 0:
+                    raise HTTPException(status_code=409, detail="Cannot delete the last active administrator")
+            connection.execute("DELETE FROM admin_users WHERE id = ?", (user_id,))
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.post("/api/v1/users/{user_id}/password", tags=["user management"])
+    def reset_user_password(user_id: int, payload: UserPasswordUpdate, principal: dict = Depends(require_admin)):
+        with connect(db_path) as connection:
+            cursor = connection.execute("UPDATE admin_users SET password_hash = ?, updated_at = ? WHERE id = ?", (hash_password(payload.password), _utc_now(), user_id))
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="User not found")
+        return {"id": user_id, "password_updated": True}
+
+    @app.post("/api/v1/auth/password", tags=["authentication"])
+    def change_own_password(payload: PasswordChange, principal: dict = Depends(require_token)):
+        if principal["id"] is None:
+            raise HTTPException(status_code=403, detail="API-token authentication cannot change a dashboard password")
+        with connect(db_path) as connection:
+            row = connection.execute("SELECT password_hash FROM admin_users WHERE id = ?", (principal["id"],)).fetchone()
+            if row is None or not verify_password(payload.old_password, row["password_hash"]):
+                raise HTTPException(status_code=400, detail="Current password is incorrect")
+            connection.execute("UPDATE admin_users SET password_hash = ?, updated_at = ? WHERE id = ?", (hash_password(payload.new_password), _utc_now(), principal["id"]))
+        return {"password_updated": True}
     @app.get("/api/v1/dashboard/summary", dependencies=[Depends(require_token)], tags=["dashboard"])
     def dashboard_summary():
         with connect(db_path) as connection:
