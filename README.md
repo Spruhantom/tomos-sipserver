@@ -4,7 +4,7 @@ A self-hosted home telephone system for Debian 13, built around Asterisk with a 
 
 ## Current status
 
-The Debian 13 Asterisk foundation passes CI. The repository now includes a source-build installer for Asterisk 22 LTS, PJSIP endpoints, an authenticated FastAPI extension-management API, SQLite persistence, a privileged configuration-apply helper and systemd units. The dashboard is a lightweight static interface served by FastAPI, with extension management, live registration status and recent call history. Asterisk writes call-detail records to a separate local SQLite database; call audio is not recorded. WebRTC, Cisco SCCP and Yealink provisioning remain future stages.
+The Debian 13 Asterisk foundation passes CI. The repository now includes a source-build installer for Asterisk 22 LTS, PJSIP endpoints, an authenticated FastAPI extension-management API, SQLite persistence, a privileged configuration-apply helper and systemd units. The dashboard is a lightweight static interface served by FastAPI, with extension management, copyable generic SIP phone setup notes, live registration status and recent call history. Asterisk writes call-detail records to a separate local SQLite database; call audio is not recorded. WebRTC, Cisco SCCP and Yealink provisioning remain future stages.
 
 ## Install (Debian 13 only)
 
@@ -87,8 +87,8 @@ Each mutation regenerates PJSIP and dialplan configuration and requests an Aster
 
 1. **Foundation (passed CI):** Debian 13 source-build installer, Asterisk, PJSIP, internal extensions, systemd and CI.
 2. **Extension API (current):** authenticated FastAPI CRUD, SQLite persistence, password rotation, enable/disable and configuration rollback.
-3. **Dashboard (initial release):** password login, session/CSRF protection, extension listing, create, enable/disable, delete and one-time password reset display. Device registration and searchable call history, date/number/result filters and CSV export are now included.
-4. Provisioning: Yealink HTTPS profiles and Cisco SCCP model-specific provisioning.
+3. **Dashboard (initial release):** password login, session/CSRF protection, extension listing, create, enable/disable, delete and one-time password reset display. Device registration, generic SIP setup notes and searchable call history, date/number/result filters and CSV export are now included.
+4. Provisioning (initial generic SIP setup notes available): tested Yealink HTTPS profiles and Cisco SCCP model-specific provisioning.
 5. Browser phone: SIP.js, WSS, SRTP and persistent in-dashboard call controls.
 6. Home features: voicemail, call history, groups, forwarding, DND, backups and restore.
 7. Hardening/release: security review, hardware compatibility matrix and upgrade testing.

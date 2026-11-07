@@ -143,6 +143,28 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertEqual(limited.status_code, 429)
         self.assertIn("Retry-After", limited.headers)
 
+    def test_device_provisioning_returns_safe_sip_settings_without_password(self):
+        created = self.client.post("/api/v1/extensions", headers=self.headers,
+                                   json={"extension": "125", "display_name": "Workshop"})
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(self.client.get("/api/v1/extensions/125/provisioning").status_code, 401)
+        response = self.client.get("/api/v1/extensions/125/provisioning", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        profile = response.json()
+        self.assertEqual(profile["sip_username"], "125")
+        self.assertEqual(profile["authentication_username"], "125")
+        self.assertEqual(profile["server_port"], 5060)
+        self.assertEqual(profile["transport"], "UDP")
+        self.assertEqual(profile["codecs"], ["alaw", "ulaw"])
+        self.assertFalse(profile["password_included"])
+        self.assertNotIn("password", profile)
+        self.assertNotIn("sip_password", profile)
+        disabled = self.client.post("/api/v1/extensions/125/disable", headers=self.headers)
+        self.assertEqual(disabled.status_code, 200)
+        self.assertFalse(self.client.get("/api/v1/extensions/125/provisioning", headers=self.headers).json()["enabled"])
+        self.assertEqual(self.client.get("/api/v1/extensions/999/provisioning", headers=self.headers).status_code, 404)
+        self.assertEqual(self.client.get("/api/v1/extensions/12/provisioning", headers=self.headers).status_code, 422)
+
     def test_duplicate_extension_is_rejected(self):
         payload = {"extension": "121", "display_name": "Desk"}
         self.assertEqual(self.client.post("/api/v1/extensions", headers=self.headers, json=payload).status_code, 201)

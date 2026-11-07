@@ -382,6 +382,31 @@ def create_app(
             return {"extension": payload.extension, "display_name": display_name, "enabled": True, "sip_password": password}
         return mutate(operation)
 
+    @app.get("/api/v1/extensions/{extension}/provisioning", dependencies=[Depends(require_token)], tags=["provisioning"])
+    def extension_provisioning(extension: str):
+        """Return vendor-neutral SIP account settings without disclosing the SIP secret."""
+        if not re.fullmatch(EXTENSION_PATTERN, extension):
+            raise HTTPException(status_code=422, detail="Invalid extension number")
+        with connect(db_path) as connection:
+            row = connection.execute(
+                "SELECT extension, display_name, enabled FROM extensions WHERE extension = ?",
+                (extension,),
+            ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Extension not found")
+        return {
+            "extension": row["extension"],
+            "display_name": row["display_name"],
+            "enabled": bool(row["enabled"]),
+            "sip_username": row["extension"],
+            "authentication_username": row["extension"],
+            "server_port": 5060,
+            "transport": "UDP",
+            "codecs": ["alaw", "ulaw"],
+            "outbound_proxy": None,
+            "password_included": False,
+        }
+
     @app.patch("/api/v1/extensions/{extension}", dependencies=[Depends(require_token)])
     def update_extension(extension: str, payload: ExtensionUpdate):
         if not re.fullmatch(EXTENSION_PATTERN, extension):

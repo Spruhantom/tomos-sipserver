@@ -58,14 +58,48 @@ async function refresh(){
     const state=document.createElement('td'),pill=document.createElement('span');
     pill.className='pill '+(x.enabled?'':'off');pill.textContent=x.enabled?'Enabled':'Disabled';state.append(pill);tr.append(state);
     const actions=document.createElement('td');
-    for(const [label,path,method] of [[x.enabled?'Disable':'Enable','/extensions/'+x.extension+'/'+(x.enabled?'disable':'enable'),'POST'],['Reset password','/extensions/'+x.extension+'/password','POST'],['Delete','/extensions/'+x.extension,'DELETE']]){
+    for(const [label,path,method] of [['Configure phone','/extensions/'+x.extension+'/provisioning','GET'],[x.enabled?'Disable':'Enable','/extensions/'+x.extension+'/'+(x.enabled?'disable':'enable'),'POST'],['Reset password','/extensions/'+x.extension+'/password','POST'],['Delete','/extensions/'+x.extension,'DELETE']]){
       const b=document.createElement('button');b.textContent=label;
-      b.onclick=async()=>{if(method==='DELETE'&&!confirm('Delete extension '+x.extension+'?'))return;try{const d=await api(path,{method});if(d?.sip_password)secret(d.sip_password);await refresh();note('Extension updated')}catch(e){note(e.message)}};
+      b.onclick=async()=>{if(method==='DELETE'&&!confirm('Delete extension '+x.extension+'?'))return;try{const d=await api(path,{method});if(method==='GET'){openDeviceSetup(d);return}if(d?.sip_password)secret(d.sip_password);await refresh();note('Extension updated')}catch(e){note(e.message)}};
       actions.append(b)
     }
     tr.append(actions);$('#extensions').append(tr)
   }
 }
+let activeDeviceProfile=null;
+function renderDeviceProfile(){
+  if(!activeDeviceProfile)return;
+  const host=$('#device-server').value.trim();
+  const p=activeDeviceProfile;
+  const lines=[
+    'TomOS SIP phone setup',
+    'PBX server: '+(host||'[enter your TomOS server LAN address]'),
+    'SIP port: '+p.server_port,
+    'Transport: '+p.transport,
+    'SIP username: '+p.sip_username,
+    'Authentication username: '+p.authentication_username,
+    'SIP password: use the password shown when this extension was created or last reset',
+    'Codecs: '+p.codecs.join(', ').toUpperCase(),
+    'Outbound proxy: not configured',
+    'Registration: '+(p.enabled?'enabled':'DISABLED — enable this extension in the dashboard first'),
+    '',
+    'Use the SIP account settings in your phone manufacturer’s account/line page.',
+    'This is a generic manual SIP profile, not a vendor-specific auto-provisioning file.'
+  ];
+  $('#device-profile').value=lines.join('\\n');
+  $('#device-warning').textContent=p.enabled?'The extension is enabled. Keep the SIP password private.': 'This extension is disabled and cannot register until you enable it.';
+}
+function openDeviceSetup(profile){
+  activeDeviceProfile=profile;
+  $('#device-extension-label').textContent=profile.display_name+' · extension '+profile.extension;
+  $('#device-user').textContent=profile.sip_username;
+  $('#device-auth-user').textContent=profile.authentication_username;
+  $('#device-server').value='';
+  renderDeviceProfile();
+  $('#device-dialog').showModal();
+}
+$('#device-server').oninput=renderDeviceProfile;
+$('#copy-device-profile').onclick=async()=>{try{await navigator.clipboard.writeText($('#device-profile').value);note('Phone setup notes copied')}catch(e){note('Could not copy setup notes')}};
 $('#call-filters').onsubmit=async e=>{
   e.preventDefault();
   callFilters={start_date:$('#call-start').value,end_date:$('#call-end').value,number:$('#call-number').value.trim(),disposition:$('#call-disposition').value};
