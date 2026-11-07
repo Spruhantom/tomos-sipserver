@@ -58,6 +58,7 @@ async function refresh(){
     const state=document.createElement('td'),pill=document.createElement('span');
     pill.className='pill '+(x.enabled?'':'off');pill.textContent=x.enabled?'Enabled':'Disabled';state.append(pill);tr.append(state);
     const actions=document.createElement('td');
+    const yealink=document.createElement('button');yealink.textContent='Provision Yealink';yealink.disabled=!x.enabled;yealink.onclick=()=>openYealinkSetup(x);actions.append(yealink);
     for(const [label,path,method] of [['Configure phone','/extensions/'+x.extension+'/provisioning','GET'],[x.enabled?'Disable':'Enable','/extensions/'+x.extension+'/'+(x.enabled?'disable':'enable'),'POST'],['Reset password','/extensions/'+x.extension+'/password','POST'],['Delete','/extensions/'+x.extension,'DELETE']]){
       const b=document.createElement('button');b.textContent=label;
       b.onclick=async()=>{if(method==='DELETE'&&!confirm('Delete extension '+x.extension+'?'))return;try{const d=await api(path,{method});if(method==='GET'){openDeviceSetup(d);return}if(d?.sip_password)secret(d.sip_password);await refresh();note('Extension updated')}catch(e){note(e.message)}};
@@ -99,6 +100,38 @@ function openDeviceSetup(profile){
   $('#device-dialog').showModal();
 }
 $('#device-server').oninput=renderDeviceProfile;
+let yealinkExtension=null;
+function openYealinkSetup(extension){
+  yealinkExtension=extension;
+  $('#yealink-extension-label').textContent=extension.display_name+' · extension '+extension.extension;
+  $('#yealink-mac').value='';
+  $('#yealink-model').value='SIP-T46U';
+  $('#yealink-host').value='';
+  $('#yealink-dialog').showModal();
+}
+$('#yealink-form').onsubmit=async e=>{
+  e.preventDefault();
+  if(!yealinkExtension)return;
+  const button=$('#yealink-form button.primary');button.disabled=true;
+  try{
+    const device=await api('/devices/yealink',{method:'POST',body:JSON.stringify({
+      extension:yealinkExtension.extension,mac:$('#yealink-mac').value.trim(),
+      model:$('#yealink-model').value.trim(),server_host:$('#yealink-host').value.trim()
+    })});
+    $('#yealink-dialog').close();
+    $('#yealink-result-url').value='https://'+location.host+device.provisioning_path;
+    $('#yealink-result-user').value=device.provisioning_username;
+    $('#yealink-result-password').value=device.provisioning_password;
+    $('#yealink-result-dialog').showModal();
+    note('Yealink device registered. Save its provisioning credentials now.');
+  }catch(err){note(err.message)}
+  finally{button.disabled=false}
+};
+$('#copy-yealink-details').onclick=async()=>{
+  const details='Provisioning URL: '+$('#yealink-result-url').value+'\\nUsername: '+$('#yealink-result-user').value+'\\nPassword: '+$('#yealink-result-password').value;
+  try{await navigator.clipboard.writeText(details);note('Yealink provisioning details copied')}
+  catch(e){note('Could not copy provisioning details')}
+};
 $('#copy-device-profile').onclick=async()=>{try{await navigator.clipboard.writeText($('#device-profile').value);note('Phone setup notes copied')}catch(e){note('Could not copy setup notes')}};
 $('#call-filters').onsubmit=async e=>{
   e.preventDefault();
