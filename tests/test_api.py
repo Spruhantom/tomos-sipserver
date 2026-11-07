@@ -223,9 +223,10 @@ class ExtensionApiTests(unittest.TestCase):
         self.client.post("/api/v1/users", headers={"X-Tomos-CSRF":login.cookies.get("tomos_csrf")},
                          json={"username":"viewer2","password":"strong-password-789","role":"viewer"})
         viewer = TestClient(self.client.app)
-        self.assertEqual(viewer.post("/api/v1/auth/login", json={"username":"viewer2","password":"strong-password-789"}).status_code, 200)
+        viewer_login = viewer.post("/api/v1/auth/login", json={"username":"viewer2","password":"strong-password-789"})
+        self.assertEqual(viewer_login.status_code, 200)
         self.assertEqual(viewer.get("/api/v1/extensions").status_code, 200)
-        self.assertEqual(viewer.post("/api/v1/extensions", json={"extension":"133","display_name":"Denied"}).status_code, 403)
+        self.assertEqual(viewer.post("/api/v1/extensions", headers={"X-Tomos-CSRF":viewer_login.cookies.get("tomos_csrf")}, json={"extension":"133","display_name":"Denied"}).status_code, 403)
         self.assertEqual(viewer.get("/api/v1/users").status_code, 403)
 
     def test_operator_can_manage_extensions_but_not_dashboard_users(self):
@@ -233,8 +234,9 @@ class ExtensionApiTests(unittest.TestCase):
         self.client.post("/api/v1/users", headers={"X-Tomos-CSRF":login.cookies.get("tomos_csrf")},
                          json={"username":"operator2","password":"strong-password-abc","role":"operator"})
         operator = TestClient(self.client.app)
-        self.assertEqual(operator.post("/api/v1/auth/login", json={"username":"operator2","password":"strong-password-abc"}).status_code, 200)
-        self.assertEqual(operator.post("/api/v1/extensions", json={"extension":"134","display_name":"Operator desk"}).status_code, 201)
+        operator_login = operator.post("/api/v1/auth/login", json={"username":"operator2","password":"strong-password-abc"})
+        self.assertEqual(operator_login.status_code, 200)
+        self.assertEqual(operator.post("/api/v1/extensions", headers={"X-Tomos-CSRF":operator_login.cookies.get("tomos_csrf")}, json={"extension":"134","display_name":"Operator desk"}).status_code, 201)
         self.assertEqual(operator.get("/api/v1/users").status_code, 403)
 
     def test_last_active_admin_cannot_be_demoted_disabled_or_deleted(self):
@@ -261,7 +263,7 @@ class ExtensionApiTests(unittest.TestCase):
     def test_user_can_change_own_password(self):
         login = self.client.post("/api/v1/auth/login", json={"username":"admin","password":"admin-test-password-0123456789"})
         self.assertEqual(login.status_code, 200)
-        changed = self.client.post("/api/v1/auth/password", json={"old_password":"admin-test-password-0123456789","new_password":"replacement-admin-password-123"})
+        changed = self.client.post("/api/v1/auth/password", headers={"X-Tomos-CSRF":login.cookies.get("tomos_csrf")}, json={"old_password":"admin-test-password-0123456789","new_password":"replacement-admin-password-123"})
         self.assertEqual(changed.status_code, 200)
         self.assertEqual(self.client.post("/api/v1/auth/logout").status_code, 200)
         relogin = self.client.post("/api/v1/auth/login", json={"username":"admin","password":"replacement-admin-password-123"})
