@@ -197,6 +197,75 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertEqual(reset.status_code, 200)
         self.assertEqual(len(reset.json()["sip_password"]), 43)
 
+    def test_dashboard_passwords_are_hashed_in_database(self):
+        with connect(self.db) as connection:
+            row = connection.execute("SELECT username, role, password_hash FROM admin_users").fetchone()
+        self.assertEqual(row["username"], "admin")
+        self.assertEqual(row["role"], "admin")
+        self.assertTrue(row["password_hash"].startswith("pbkdf2_sha256$"))
+        self.assertNotEqual(row["password_hash"], "admin-test-password-0123456789")
+
+    def test_admin_can_create_and_list_operator_and_viewer_accounts(self):
+        login = self.client.post("/api/v1/auth/login", json={"username":"admin","password":"admin-test-password-0123456789"})
+        csrf = login.cookies.get("tomos_csrf")
+        headers = {"X-Tomos-CSRF": csrf}
+        operator = self.client.post("/api/v1/users", headers=headers, json={"username":"operator1","password":"strong-password-123","role":"operator"})
+        self.assertEqual(operator.status_code, 201, operator.text)
+        self.assertEqual(operator.json()["role"], "operator")
+        viewer = self.client.post("/api/v1/users", headers=headers, json={"username":"viewer1","password":"strong-password-456","role":"viewer"})
+        self.assertEqual(viewer.status_code, 201, viewer.text)
+        listed = self.client.get("/api/v1/users")
+        self.assertEqual(listed.status_code, 200)
+        self.assertNotIn("password_hash", listed.text)
+
+    def test_viewer_is_read_only_and_cannot_manage_users(self):
+        login = self.client.post("/api/v1/auth/login", json={"username":"admin","password":"admin-test-password-0123456789"})
+        self.client.post("/api/v1/users", headers={"X-Tomos-CSRF":login.cookies.get("tomos_csrf")},
+                         json={"username":"viewer2","password":"strong-password-789","role":"viewer"})
+        viewer = TestClient(self.client.app)
+        self.assertEqual(viewer.post("/api/v1/auth/login", json={"username":"viewer2","password":"strong-password-789"}).status_code, 200)
+        self.assertEqual(viewer.get("/api/v1/extensions").status_code, 200)
+        self.assertEqual(viewer.post("/api/v1/extensions", json={"extension":"133","display_name":"Denied"}).status_code, 403)
+        self.assertEqual(viewer.get("/api/v1/users").status_code, 403)
+
+    def test_operator_can_manage_extensions_but_not_dashboard_users(self):
+        login = self.client.post("/api/v1/auth/login", json={"username":"admin","password":"admin-test-password-0123456789"})
+        self.client.post("/api/v1/users", headers={"X-Tomos-CSRF":login.cookies.get("tomos_csrf")},
+                         json={"username":"operator2","password":"strong-password-abc","role":"operator"})
+        operator = TestClient(self.client.app)
+        self.assertEqual(operator.post("/api/v1/auth/login", json={"username":"operator2","password":"strong-password-abc"}).status_code, 200)
+        self.assertEqual(operator.post("/api/v1/extensions", json={"extension":"134","display_name":"Operator desk"}).status_code, 201)
+        self.assertEqual(operator.get("/api/v1/users").status_code, 403)
+
+    def test_last_active_admin_cannot_be_demoted_disabled_or_deleted(self):
+        login = self.client.post("/api/v1/auth/login", json={"username":"admin","password":"admin-test-password-0123456789"})
+        csrf = login.cookies.get("tomos_csrf")
+        admin_id = self.client.get("/api/v1/users").json()[0]["id"]
+        headers = {"X-Tomos-CSRF":csrf}
+        self.assertEqual(self.client.patch(f"/api/v1/users/{admin_id}", headers=headers, json={"role":"operator"}).status_code, 409)
+        self.assertEqual(self.client.patch(f"/api/v1/users/{admin_id}", headers=headers, json={"enabled":False}).status_code, 409)
+        self.assertEqual(self.client.delete(f"/api/v1/users/{admin_id}", headers=headers).status_code, 409)
+
+    def test_disabled_account_cannot_log_in_and_admin_can_reset_password(self):
+        login = self.client.post("/api/v1/auth/login", json={"username":"admin","password":"admin-test-password-0123456789"})
+        csrf = login.cookies.get("tomos_csrf")
+        created = self.client.post("/api/v1/users", headers={"X-Tomos-CSRF":csrf},
+                                   json={"username":"operator3","password":"strong-password-xyz","role":"operator"})
+        user_id = created.json()["id"]
+        self.assertEqual(self.client.patch(f"/api/v1/users/{user_id}", headers={"X-Tomos-CSRF":csrf}, json={"enabled":False}).status_code, 200)
+        disabled_client = TestClient(self.client.app)
+        self.assertEqual(disabled_client.post("/api/v1/auth/login", json={"username":"operator3","password":"strong-password-xyz"}).status_code, 401)
+        self.assertEqual(self.client.post(f"/api/v1/users/{user_id}/password", headers={"X-Tomos-CSRF":csrf},
+                                          json={"password":"new-strong-password-123"}).status_code, 200)
+
+    def test_user_can_change_own_password(self):
+        login = self.client.post("/api/v1/auth/login", json={"username":"admin","password":"admin-test-password-0123456789"})
+        self.assertEqual(login.status_code, 200)
+        changed = self.client.post("/api/v1/auth/password", json={"old_password":"admin-test-password-0123456789","new_password":"replacement-admin-password-123"})
+        self.assertEqual(changed.status_code, 200)
+        self.assertEqual(self.client.post("/api/v1/auth/logout").status_code, 200)
+        relogin = self.client.post("/api/v1/auth/login", json={"username":"admin","password":"replacement-admin-password-123"})
+        self.assertEqual(relogin.status_code, 200)
 
 if __name__ == "__main__":
     unittest.main()
