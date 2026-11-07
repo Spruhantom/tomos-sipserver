@@ -101,7 +101,7 @@ class ExtensionApiTests(unittest.TestCase):
 
 
     def test_dashboard_login_sets_session_and_csrf_protects_mutations(self):
-        response = self.client.post("/api/v1/auth/login", json={"password": "admin-test-password-0123456789"})
+        response = self.client.post("/api/v1/auth/login", json={"username": "admin", "password": "admin-test-password-0123456789"})
         self.assertEqual(response.status_code, 200)
         self.assertIn("tomos_session", response.cookies)
         self.assertEqual(self.client.get("/api/v1/extensions").status_code, 200)
@@ -125,21 +125,33 @@ class ExtensionApiTests(unittest.TestCase):
     def test_dashboard_status_requires_authentication(self):
         self.assertEqual(self.client.get("/api/v1/dashboard/status").status_code, 401)
 
+    def test_dashboard_login_requires_correct_username(self):
+        response = self.client.post("/api/v1/auth/login", json={
+            "username": "not-admin", "password": "admin-test-password-0123456789"
+        })
+        self.assertEqual(response.status_code, 401)
+
+    def test_dashboard_login_rejects_invalid_username_format(self):
+        response = self.client.post("/api/v1/auth/login", json={
+            "username": "x", "password": "admin-test-password-0123456789"
+        })
+        self.assertEqual(response.status_code, 422)
+
     def test_dashboard_rejects_wrong_password(self):
-        response = self.client.post("/api/v1/auth/login", json={"password": "incorrect"})
+        response = self.client.post("/api/v1/auth/login", json={"username": "admin", "password": "incorrect"})
         self.assertEqual(response.status_code, 401)
 
     def test_dashboard_login_rate_limits_repeated_failures_and_clears_after_success(self):
         for _ in range(4):
-            response = self.client.post("/api/v1/auth/login", json={"password": "incorrect"})
+            response = self.client.post("/api/v1/auth/login", json={"username": "admin", "password": "incorrect"})
             self.assertEqual(response.status_code, 401)
-        accepted = self.client.post("/api/v1/auth/login", json={"password": "admin-test-password-0123456789"})
+        accepted = self.client.post("/api/v1/auth/login", json={"username": "admin", "password": "admin-test-password-0123456789"})
         self.assertEqual(accepted.status_code, 200)
         self.assertEqual(self.client.post("/api/v1/auth/logout").status_code, 200)
         for _ in range(5):
-            response = self.client.post("/api/v1/auth/login", json={"password": "incorrect"})
+            response = self.client.post("/api/v1/auth/login", json={"username": "admin", "password": "incorrect"})
             self.assertEqual(response.status_code, 401)
-        limited = self.client.post("/api/v1/auth/login", json={"password": "incorrect"})
+        limited = self.client.post("/api/v1/auth/login", json={"username": "admin", "password": "incorrect"})
         self.assertEqual(limited.status_code, 429)
         self.assertIn("Retry-After", limited.headers)
 
