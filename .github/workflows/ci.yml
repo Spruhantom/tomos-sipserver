@@ -188,9 +188,7 @@ jobs:
           DASH_STATUS="$(curl --fail --silent --show-error http://127.0.0.1:8000/api/v1/dashboard/status -H "Authorization: Bearer $API_TOKEN")"
           grep -Fq '"status":"online"' <<<"$DASH_STATUS"
           CALL_HISTORY="$(curl --fail --silent --show-error http://127.0.0.1:8000/api/v1/calls -H "Authorization: Bearer $API_TOKEN")"
-          grep -Fq '"total":1' <<<"$CALL_HISTORY"
-          grep -Fq '"destination":"900"' <<<"$CALL_HISTORY"
-          grep -Fq '"disposition":"ANSWERED"' <<<"$CALL_HISTORY"
+          python3 -c 'import json,sys; payload=json.load(sys.stdin); assert payload["total"] >= 1, payload; assert any(call["destination"] == "900" and call["disposition"] == "ANSWERED" for call in payload["calls"]), payload' <<<"$CALL_HISTORY"
           AUTH_HEADER="Authorization: Bearer $API_TOKEN"
           CREATED="$(curl --fail --silent --show-error -X POST http://127.0.0.1:8000/api/v1/extensions \
             -H "$AUTH_HEADER" -H 'Content-Type: application/json' \
