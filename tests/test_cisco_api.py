@@ -40,12 +40,15 @@ class CiscoInventoryApiTests(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["mac"], "001565AABBCC")
         self.assertEqual(body["model"], "7960")
-        self.assertEqual(body["provisioning_status"], "not_configured")
+        self.assertEqual(body["sccp_config_status"], "generated")
+        self.assertEqual(body["tftp_profile_status"], "not_configured")
         self.assertEqual(body["hardware_test_status"], "not_tested")
         listed = self.client.get("/api/v1/devices/cisco", headers=self.headers)
         self.assertEqual(listed.status_code, 200)
         self.assertEqual(len(listed.json()), 1)
         self.assertEqual(listed.json()[0]["extension"], "125")
+        self.assertEqual(listed.json()[0]["sccp_config_status"], "generated")
+        self.assertEqual(listed.json()[0]["tftp_profile_status"], "not_configured")
         self.assertEqual(listed.json()[0]["hardware_test_status"], "not_tested")
 
     def test_only_initial_target_models_are_accepted(self):
