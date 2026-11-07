@@ -317,7 +317,6 @@ $('#login-form').onsubmit=async e=>{e.preventDefault();try{const result=await ap
 $('#logout').onclick=async()=>{try{await api('/auth/logout',{method:'POST'})}finally{csrf='';currentUser=null;$('#change-password').hidden=true;$('#current-user').textContent='';showLogin()}};
 $('#change-password').onclick=()=>$('#own-password-dialog').showModal();
 $('#own-password-form').onsubmit=async e=>{e.preventDefault();try{await api('/auth/password',{method:'POST',body:JSON.stringify({old_password:$('#own-old-password').value,new_password:$('#own-new-password').value})});$('#own-password-dialog').close();$('#own-password-form').reset();note('Your password has been changed')}catch(err){note(err.message)}};
-let resetUserId=null;
 async function loadUsers(){
   const users=await api('/users');
   const body=$('#users');body.replaceChildren();$('#users-empty').hidden=users.length>0;
