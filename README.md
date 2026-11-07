@@ -66,7 +66,7 @@ Each mutation regenerates PJSIP and dialplan configuration and requests an Aster
 
 - No public SIP, AMI, ARI, TFTP or admin-panel exposure by default.
 - Unique extension passwords; no default SIP passwords.
-- The API requires a per-installation bearer token and listens only on loopback. Dashboard sessions use HttpOnly/SameSite cookies and CSRF validation; the browser does not store the API token.
+- The API requires a per-installation bearer token and listens only on loopback. Dashboard sessions use HttpOnly/SameSite cookies and CSRF validation; the browser does not store the API token. Dashboard login is rate-limited to five failed attempts per client address in a rolling five-minute window; a successful login clears that address's failure counter.
 - SIP passwords are not returned by list or update operations; they are returned only at creation/reset.
 - Keep administration on the LAN/VPN and use HTTPS with a trusted reverse proxy for remote dashboard access; enable secure cookies when TLS is configured.
 - Never expose AMI/ARI directly to browsers or untrusted networks.

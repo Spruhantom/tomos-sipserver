@@ -12,6 +12,7 @@ import sqlite3
 import subprocess
 import tempfile
 import threading
+import time
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
@@ -184,6 +185,10 @@ def create_app(
     cookie_secure = os.environ.get("TOMOS_COOKIE_SECURE", "false").lower() in {"1", "true", "yes"}
     dashboard_dir = Path(static_dir or os.environ.get("TOMOS_DASHBOARD_DIR", "/opt/tomos-sipserver/app/dashboard"))
     mutation_lock = threading.RLock()
+    login_attempts: dict[str, list[float]] = {}
+    login_lock = threading.Lock()
+    login_window_seconds = 300
+    login_max_attempts = 5
     app = FastAPI(
         title="TomOS SIP Server API",
         version="0.2.0",
@@ -244,9 +249,28 @@ def create_app(
         return {"status": "ok", "service": "tomos-sipserver-api"}
 
     @app.post("/api/v1/auth/login", tags=["authentication"])
-    def dashboard_login(payload: DashboardLogin, response: Response):
+    def dashboard_login(payload: DashboardLogin, request: Request, response: Response):
+        client_ip = request.client.host if request.client else "unknown"
+        now = time.monotonic()
+        with login_lock:
+            attempts = [stamp for stamp in login_attempts.get(client_ip, []) if now - stamp < login_window_seconds]
+            if len(attempts) >= login_max_attempts:
+                retry_after = max(1, int(login_window_seconds - (now - attempts[0])))
+                login_attempts[client_ip] = attempts
+                raise HTTPException(status_code=429, detail="Too many login attempts. Try again later.",
+                                    headers={"Retry-After": str(retry_after)})
+            login_attempts[client_ip] = attempts
+            if len(login_attempts) > 1024:
+                expired = [address for address, stamps in login_attempts.items()
+                           if not stamps or now - stamps[-1] >= login_window_seconds]
+                for address in expired:
+                    login_attempts.pop(address, None)
         if not hmac.compare_digest(payload.password, admin_secret):
+            with login_lock:
+                login_attempts.setdefault(client_ip, []).append(now)
             raise HTTPException(status_code=401, detail="Invalid password")
+        with login_lock:
+            login_attempts.pop(client_ip, None)
         issued = str(int(datetime.now(timezone.utc).timestamp()))
         csrf = secrets.token_urlsafe(24)
         signed = f"{issued}.{csrf}"
