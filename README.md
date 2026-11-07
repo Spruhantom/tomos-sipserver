@@ -8,11 +8,21 @@ The Debian 13 Asterisk foundation passes CI. The repository now includes a sourc
 
 ## Install (Debian 13 only)
 
-Clone this repository on a clean Debian 13 host, then run:
+**Quick install — one command** on a clean Debian 13 host:
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/Spruhantom/tomos-sipserver/main/install.sh | sudo bash
+```
+
+Alternatively, clone the repository and run the installer locally:
+
+```bash
+git clone https://github.com/Spruhantom/tomos-sipserver.git
+cd tomos-sipserver
 sudo ./install.sh
 ```
+
+The one-line command downloads the current installer from the repository's `main` branch and runs it with root privileges. Review the installer before running it, and use a clean Debian 13 machine or VM.
 
 The installer builds the pinned Asterisk 22.12.0 LTS source release because Debian 13 stable does not currently publish the Asterisk PBX package. It verifies the source archive against the SHA-256 digest published with the official Asterisk 22.12.0 GitHub release before compiling.
 
