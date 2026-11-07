@@ -439,7 +439,7 @@ def create_app(
         if principal["id"] == user_id:
             raise HTTPException(status_code=409, detail="You cannot delete your own account")
         with connect(db_path) as connection:
-            target = connection.execute("SELECT id, role, enabled FROM admin_users WHERE id = ?", (user_id,)).fetchone()
+            target = connection.execute("SELECT id, username, role, enabled FROM admin_users WHERE id = ?", (user_id,)).fetchone()
             if target is None:
                 raise HTTPException(status_code=404, detail="User not found")
             if target["role"] == "admin" and target["enabled"]:
