@@ -50,6 +50,7 @@ log "Configuring and compiling Asterisk ${ASTERISK_VERSION} with bundled PJProje
 make menuselect.makeopts
 make -j"$BUILD_JOBS"
 make install
+make install-headers
 
 log "Building pinned chan_sccp driver for Asterisk ${ASTERISK_VERSION}."
 if [[ ! -d "$SCCP_SOURCE_DIR/.git" ]]; then
