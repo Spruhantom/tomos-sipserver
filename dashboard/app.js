@@ -341,7 +341,7 @@ async function loadAudit(){
   $('#audit-empty').hidden=result.events.length>0;
   for(const event of result.events){
     const row=document.createElement('tr');
-    const values=[new Date(event.occurred_at).toLocaleString(),event.actor_username,event.action,event.target_username||'—',JSON.stringify(event.details)];
+    const values=[new Date(event.occurred_at).toISOString().replace('T',' ').replace('Z',' UTC'),event.actor_username,event.action,event.target_username||'—',JSON.stringify(event.details)];
     for(const value of values){const cell=document.createElement('td');cell.textContent=value;row.append(cell)}
     body.append(row);
   }
