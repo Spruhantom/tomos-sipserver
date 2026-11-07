@@ -57,7 +57,7 @@ The dashboard is served at `http://127.0.0.1:8000/`. Sign in using the one-time 
 - `POST /api/v1/devices/yealink` — register a Yealink phone against an enabled extension. Supply `extension`, `mac`, `model` and `server_host`. The response displays a unique HTTP Basic provisioning password once.
 - `GET /api/v1/devices/yealink` — list registered Yealink devices without provisioning secrets.
 - `DELETE /api/v1/devices/yealink/{mac}` — revoke a phone's provisioning access.
-- `GET /provisioning/yealink/{MAC}.cfg` — serve the generated Yealink CFG file. The phone must authenticate with its per-device HTTP Basic credentials over HTTPS.
+- `GET /provisioning/yealink/{MAC}.cfg` — serve the generated Yealink CFG file. The phone must authenticate with its per-device HTTP Basic credentials over HTTPS. Configure the phone with the provisioning directory URL (`https://HOST/provisioning/yealink/`); Yealink then requests its MAC-specific CFG filename.
 - `GET /api/v1/calls?limit=50&offset=0&start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&number=100&disposition=ANSWERED` — read filtered call-detail records (maximum 100 per page). Date bounds are inclusive; number matches caller ID, source or destination.
 - `GET /api/v1/calls/export.csv` — export matching call history as CSV (maximum 5,000 records per export). Spreadsheet formula-leading values are neutralised.
 
