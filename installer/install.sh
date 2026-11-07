@@ -26,6 +26,36 @@ SOURCE_DIR="$BUILD_ROOT/asterisk-${ASTERISK_VERSION}"
 BUILD_JOBS="${TOMOS_BUILD_JOBS:-2}"
 [[ "$BUILD_JOBS" =~ ^[1-9][0-9]?$ ]] || die "TOMOS_BUILD_JOBS must be a positive integer from 1 to 99."
 
+# Preserve existing dashboard credentials on upgrades unless the operator changes them.
+EXISTING_ADMIN_USERNAME=""
+EXISTING_ADMIN_PASSWORD=""
+if [[ -r /etc/tomos-sipserver/api.env ]]; then
+  EXISTING_ADMIN_USERNAME="$(sed -n 's/^TOMOS_ADMIN_USERNAME=//p' /etc/tomos-sipserver/api.env | tail -n 1 | tr -d '"')"
+  EXISTING_ADMIN_PASSWORD="$(sed -n 's/^TOMOS_ADMIN_PASSWORD=//p' /etc/tomos-sipserver/api.env | tail -n 1 | tr -d '"')"
+fi
+ADMIN_USERNAME="\${TOMOS_ADMIN_USERNAME:-\${EXISTING_ADMIN_USERNAME:-admin}}"
+ADMIN_PASSWORD="\${TOMOS_ADMIN_PASSWORD:-\${EXISTING_ADMIN_PASSWORD:-}}"
+if [[ -t 0 && -t 1 ]]; then
+  read -r -p "TomOS administrator username [\${ADMIN_USERNAME}]: " entered_username
+  ADMIN_USERNAME="\${entered_username:-$ADMIN_USERNAME}"
+  if [[ -z "\${TOMOS_ADMIN_PASSWORD:-}" ]]; then
+    read -r -s -p "TomOS administrator password (leave blank to keep existing): " entered_password
+    printf '\n'
+    if [[ -n "$entered_password" ]]; then
+      read -r -s -p "Confirm administrator password: " confirmed_password
+      printf '\n'
+      [[ "$entered_password" == "$confirmed_password" ]] || die "Administrator passwords do not match."
+      ADMIN_PASSWORD="$entered_password"
+    fi
+  fi
+fi
+[[ "$ADMIN_USERNAME" =~ ^[A-Za-z0-9_.-]{3,32}$ ]] || die "Administrator username must be 3-32 characters: letters, numbers, dot, underscore or hyphen."
+if [[ -z "$ADMIN_PASSWORD" ]]; then
+  ADMIN_PASSWORD="$(openssl rand -hex 24)"
+  log "No interactive terminal or supplied administrator password; generated a secure password."
+fi
+[[ "\${#ADMIN_PASSWORD}" -ge 24 && "\${#ADMIN_PASSWORD}" -le 256 ]] || die "Administrator password must be between 24 and 256 characters."
+
 log "Installing Asterisk and API dependencies."
 apt-get update
 apt-get install -y --no-install-recommends build-essential git wget curl ca-certificates pkg-config python3 python3-venv sudo openssl \
@@ -118,14 +148,14 @@ chmod 0600 /var/lib/tomos-sipserver/extensions.db
 
 install -d -o root -g tomos -m 0750 /etc/tomos-sipserver
 API_TOKEN="$(openssl rand -hex 32)"
-ADMIN_PASSWORD="$(openssl rand -hex 24)"
-printf 'TOMOS_API_TOKEN=%s\nTOMOS_ADMIN_PASSWORD=%s\n' "$API_TOKEN" "$ADMIN_PASSWORD" > /etc/tomos-sipserver/api.env
+printf 'TOMOS_API_TOKEN=%s\nTOMOS_ADMIN_USERNAME=%s\nTOMOS_ADMIN_PASSWORD=%s\n' "$API_TOKEN" "$ADMIN_USERNAME" "$ADMIN_PASSWORD" > /etc/tomos-sipserver/api.env
 chown root:tomos /etc/tomos-sipserver/api.env
 chmod 0640 /etc/tomos-sipserver/api.env
 printf '%s\n' "$API_TOKEN" > /root/tomos-sip-api-token.txt
 chmod 0600 /root/tomos-sip-api-token.txt
+printf '%s\n' "$ADMIN_USERNAME" > /root/tomos-sip-dashboard-username.txt
 printf '%s\n' "$ADMIN_PASSWORD" > /root/tomos-sip-dashboard-password.txt
-chmod 0600 /root/tomos-sip-dashboard-password.txt
+chmod 0600 /root/tomos-sip-dashboard-username.txt /root/tomos-sip-dashboard-password.txt
 install -D -o root -g root -m 0755 "$REPO_ROOT/scripts/tomos-sipserver-apply-config" /usr/local/sbin/tomos-sipserver-apply-config
 install -D -o root -g root -m 0755 "$REPO_ROOT/scripts/tomos-sipserver-status" /usr/local/sbin/tomos-sipserver-status
 install -D -o root -g root -m 0440 "$REPO_ROOT/sudoers/tomos-sipserver-api" /etc/sudoers.d/tomos-sipserver-api
