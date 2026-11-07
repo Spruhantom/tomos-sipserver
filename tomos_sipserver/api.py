@@ -39,6 +39,7 @@ provisioning_security = HTTPBasic(auto_error=False)
 
 class DashboardLogin(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    username: str = Field(min_length=3, max_length=32, pattern=r"^[A-Za-z0-9_.-]+$")
     password: str = Field(min_length=1, max_length=256)
 
 
@@ -207,6 +208,7 @@ def create_app(
     api_token: str | None = None,
     apply_callback: Callable[[], None] | None = None,
     admin_password: str | None = None,
+    admin_username: str | None = None,
     static_dir: str | Path | None = None,
     status_callback: Callable[[], dict] | None = None,
     cdr_database_path: str | Path | None = None,
@@ -222,6 +224,9 @@ def create_app(
     admin_secret = admin_password if admin_password is not None else os.environ.get("TOMOS_ADMIN_PASSWORD", "")
     if len(admin_secret) < 24:
         raise RuntimeError("TOMOS_ADMIN_PASSWORD must be configured with at least 24 characters")
+    admin_user = admin_username if admin_username is not None else os.environ.get("TOMOS_ADMIN_USERNAME", "admin")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{3,32}", admin_user):
+        raise RuntimeError("TOMOS_ADMIN_USERNAME must be 3-32 letters, numbers, dots, underscores or hyphens")
     cookie_secure = os.environ.get("TOMOS_COOKIE_SECURE", "false").lower() in {"1", "true", "yes"}
     dashboard_dir = Path(static_dir or os.environ.get("TOMOS_DASHBOARD_DIR", "/opt/tomos-sipserver/app/dashboard"))
     mutation_lock = threading.RLock()
@@ -300,7 +305,7 @@ def create_app(
                 raise HTTPException(status_code=429, detail="Too many login attempts. Try again later.",
                                     headers={"Retry-After": str(retry_after)})
             login_attempts[client_ip] = attempts
-            if not hmac.compare_digest(payload.password, admin_secret):
+            if not (hmac.compare_digest(payload.username, admin_user) and hmac.compare_digest(payload.password, admin_secret)):
                 login_attempts[client_ip].append(now)
                 raise HTTPException(status_code=401, detail="Invalid password")
             login_attempts.pop(client_ip, None)
