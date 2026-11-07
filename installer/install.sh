@@ -232,7 +232,12 @@ chmod 0600 "$CREDENTIAL_FILE"
 log "Installation completed. Asterisk ${ASTERISK_VERSION}, extension API and call history are running."
 log "Initial SIP credentials saved to $CREDENTIAL_FILE (root-only)."
 log "API bearer token saved to /root/tomos-sip-api-token.txt (root-only)."
-log "Dashboard password saved to /root/tomos-sip-dashboard-password.txt (root-only); open http://127.0.0.1:8000/ on the server or use a trusted HTTPS reverse proxy."
+if [[ -z "$EXISTING_ADMIN_USERNAME" || "$ADMIN_PASSWORD_CHANGED" -eq 1 ]]; then
+  log "Installer bootstrap password saved to /root/tomos-sip-dashboard-password.txt (root-only)."
+else
+  log "Password file is the original installer credential only; use the current password set in the dashboard."
+fi
+log "Open http://127.0.0.1:8000/ on the server or use a trusted HTTPS reverse proxy."
 log "Extension API listens on 127.0.0.1:8000; use a trusted HTTPS reverse proxy for remote administration."
 log "SIP: UDP 5060; SCCP: TCP 2000; RTP: UDP 10000-20000. Restrict access to your trusted LAN/VPN."
 log "No router port forwarding, public SIP exposure or SIP trunk has been configured."
