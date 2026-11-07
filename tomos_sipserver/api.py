@@ -28,6 +28,7 @@ from .db import DEFAULT_DB, connect, initialize_database
 from .yealink import normalize_mac, normalize_model, render_yealink_cfg, validate_server_host
 from .grandstream import normalize_model as normalize_grandstream_model, render_grandstream_xml
 from .polycom import normalize_model as normalize_polycom_model, render_polycom_cfg
+from .cisco import normalize_model as normalize_cisco_model
 
 EXTENSION_PATTERN = r"^[1-9][0-9]{2,5}$"
 PASSWORD_PATTERN = r"^[A-Za-z0-9._~-]{24,128}$"
@@ -74,6 +75,14 @@ class GrandstreamDeviceCreate(BaseModel):
     extension: str = Field(pattern=EXTENSION_PATTERN)
     mac: str = Field(min_length=12, max_length=17)
     model: str = Field(default="GRP2601", min_length=2, max_length=32, pattern=r"^[A-Za-z0-9-]+$")
+    server_host: str = Field(min_length=1, max_length=253)
+
+
+class CiscoDeviceCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    extension: str = Field(pattern=EXTENSION_PATTERN)
+    mac: str = Field(min_length=12, max_length=17)
+    model: str = Field(min_length=4, max_length=16, pattern=r"^[A-Za-z0-9 -]+$")
     server_host: str = Field(min_length=1, max_length=253)
 
 
@@ -552,6 +561,72 @@ def create_app(
             return {"extension": payload.extension, "display_name": display_name, "enabled": True, "sip_password": password}
         return mutate(operation)
 
+
+    @app.post("/api/v1/devices/cisco", status_code=status.HTTP_201_CREATED,
+              dependencies=[Depends(require_token)], tags=["Cisco SCCP provisioning"])
+    def register_cisco_device(payload: CiscoDeviceCreate):
+        """Add a Cisco SCCP handset to inventory; this does not provision or activate it."""
+        try:
+            mac = normalize_mac(payload.mac)
+            host = validate_server_host(payload.server_host)
+            model = normalize_cisco_model(payload.model)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        now = _utc_now()
+        with connect(db_path) as connection:
+            extension_row = connection.execute(
+                "SELECT enabled FROM extensions WHERE extension = ?", (payload.extension,)
+            ).fetchone()
+            if extension_row is None:
+                raise HTTPException(status_code=404, detail="Extension not found")
+            if not extension_row["enabled"]:
+                raise HTTPException(status_code=409, detail="Enable the SIP extension before assigning a Cisco phone")
+            try:
+                connection.execute(
+                    """INSERT INTO cisco_devices (mac, extension, model, server_host, created_at)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (mac, payload.extension, model, host, now),
+                )
+            except sqlite3.IntegrityError as error:
+                raise HTTPException(status_code=409, detail="A Cisco device with this MAC address is already registered") from error
+        return {
+            "mac": mac, "extension": payload.extension, "model": model,
+            "server_host": host, "inventory_status": "registered",
+            "provisioning_status": "not_configured",
+            "hardware_test_status": "not_tested",
+        }
+
+    @app.get("/api/v1/devices/cisco", dependencies=[Depends(require_token)],
+             tags=["Cisco SCCP provisioning"])
+    def list_cisco_devices():
+        with connect(db_path) as connection:
+            rows = connection.execute(
+                """SELECT d.mac, d.extension, d.model, d.server_host, d.created_at,
+                          e.display_name, e.enabled
+                   FROM cisco_devices d JOIN extensions e ON e.extension = d.extension
+                   ORDER BY d.mac"""
+            ).fetchall()
+        return [{
+            "mac": row["mac"], "extension": row["extension"],
+            "display_name": row["display_name"], "model": row["model"],
+            "server_host": row["server_host"], "enabled": bool(row["enabled"]),
+            "created_at": row["created_at"],
+            "provisioning_status": "not_configured",
+            "hardware_test_status": "not_tested",
+        } for row in rows]
+
+    @app.delete("/api/v1/devices/cisco/{mac}", status_code=status.HTTP_204_NO_CONTENT,
+                dependencies=[Depends(require_token)], tags=["Cisco SCCP provisioning"])
+    def remove_cisco_device(mac: str):
+        try:
+            canonical_mac = normalize_mac(mac)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        with connect(db_path) as connection:
+            cursor = connection.execute("DELETE FROM cisco_devices WHERE mac = ?", (canonical_mac,))
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Cisco device not found")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post("/api/v1/devices/yealink", status_code=status.HTTP_201_CREATED,
               dependencies=[Depends(require_token)], tags=["Yealink provisioning"])
