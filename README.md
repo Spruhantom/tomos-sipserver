@@ -56,8 +56,9 @@ The dashboard is served at `http://127.0.0.1:8000/`. Sign in using the one-time 
 - `DELETE /api/v1/extensions/{extension}` — delete an extension.
 - `POST /api/v1/devices/yealink` — register a Yealink phone against an enabled extension. Supply `extension`, `mac`, `model` and `server_host`. The response displays a unique HTTP Basic provisioning password once.
 - `GET /api/v1/devices/yealink` — list registered Yealink devices without provisioning secrets.
+- `POST /api/v1/devices/yealink/{mac}/credentials` — rotate a device's provisioning password and immediately revoke its previous password. The replacement is returned once.
 - `DELETE /api/v1/devices/yealink/{mac}` — revoke a phone's provisioning access.
-- `GET /provisioning/yealink/{MAC}.cfg` — serve the generated Yealink CFG file. The phone must authenticate with its per-device HTTP Basic credentials over HTTPS. Configure the phone with the provisioning directory URL (`https://HOST/provisioning/yealink/`); Yealink then requests its MAC-specific CFG filename.
+- `GET /provisioning/yealink/{MAC}.cfg` — serve the generated Yealink CFG file. The phone must authenticate with its per-device HTTP Basic credentials over HTTPS. Configure the phone with the provisioning directory URL (`https://HOST/provisioning/yealink/`); Yealink then requests its lowercase MAC-specific CFG filename. The generated file starts with the required `#!version:1.0.0.1` header. The initial supported model allowlist covers selected SIP-T30/T31/T33/T40/T41/T42/T43/T46/T48/T53/T54/T57/T58 models; unsupported models are rejected rather than silently receiving an unverified profile.
 - `GET /api/v1/calls?limit=50&offset=0&start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&number=100&disposition=ANSWERED` — read filtered call-detail records (maximum 100 per page). Date bounds are inclusive; number matches caller ID, source or destination.
 - `GET /api/v1/calls/export.csv` — export matching call history as CSV (maximum 5,000 records per export). Spreadsheet formula-leading values are neutralised.
 
@@ -92,7 +93,7 @@ Each mutation regenerates PJSIP and dialplan configuration and requests an Aster
 1. **Foundation (passed CI):** Debian 13 source-build installer, Asterisk, PJSIP, internal extensions, systemd and CI.
 2. **Extension API (current):** authenticated FastAPI CRUD, SQLite persistence, password rotation, enable/disable and configuration rollback.
 3. **Dashboard (initial release):** password login, session/CSRF protection, extension listing, create, enable/disable, delete and one-time password reset display. Device registration, generic SIP setup notes and searchable call history, date/number/result filters and CSV export are now included.
-4. **Vendor provisioning (in progress):** initial Yealink T-series MAC-specific CFG generation, per-device one-time HTTP Basic credentials, HTTPS-only retrieval and dashboard registration workflow are implemented. Next: validate model/firmware parameter compatibility on physical Yealink phones, test HTTPS reverse-proxy deployment, and add provisioning credential rotation. Cisco SCCP remains future work.
+4. **Vendor provisioning (in progress):** initial Yealink T-series MAC-specific CFG generation, per-device one-time HTTP Basic credentials, HTTPS-only retrieval and dashboard registration workflow are implemented. Next: validate model/firmware parameter compatibility on physical Yealink phones and test HTTPS reverse-proxy deployment. Device credential rotation and dashboard revoke controls are now included. Cisco SCCP remains future work.
 5. Browser phone: SIP.js, WSS, SRTP and persistent in-dashboard call controls.
 6. Home features: voicemail, call history, groups, forwarding, DND, backups and restore.
 7. Hardening/release: security review, hardware compatibility matrix and upgrade testing.
