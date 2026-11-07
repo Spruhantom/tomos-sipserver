@@ -333,7 +333,20 @@ async function loadUsers(){
     const remove=document.createElement("button");remove.textContent="Delete";remove.disabled=user.id===currentUser.id;remove.onclick=async()=>{if(!confirm("Permanently delete account "+user.username+"?"))return;try{await api("/users/"+user.id,{method:"DELETE"});await loadUsers();note("Account deleted")}catch(error){note(error.message)}};
     actions.append(role,toggle,reset,remove);row.append(actions);body.append(row);
   }
+  await loadAudit();
 }
+async function loadAudit(){
+  const result=await api('/audit?limit=30');
+  const body=$('#audit-events');body.replaceChildren();
+  $('#audit-empty').hidden=result.events.length>0;
+  for(const event of result.events){
+    const row=document.createElement('tr');
+    const values=[new Date(event.occurred_at).toLocaleString(),event.actor_username,event.action,event.target_username||'—',JSON.stringify(event.details)];
+    for(const value of values){const cell=document.createElement('td');cell.textContent=value;row.append(cell)}
+    body.append(row);
+  }
+}
+$('#audit-refresh').onclick=()=>loadAudit().catch(error=>note(error.message));
 $("#user-create-form").onsubmit=async event=>{event.preventDefault();const button=$("#user-create-form button");button.disabled=true;try{const result=await api("/users",{method:"POST",body:JSON.stringify({username:$("#new-username").value.trim(),password:$("#new-user-password").value,role:$("#new-user-role").value})});$("#user-create-form").reset();await loadUsers();note("Created "+result.role+" account "+result.username)}catch(error){note(error.message)}finally{button.disabled=false}};
 $("#user-password-form").onsubmit=async event=>{event.preventDefault();if(!resetUserId)return;const button=$("#user-password-form button.primary");button.disabled=true;try{await api("/users/"+resetUserId+"/password",{method:"POST",body:JSON.stringify({password:$("#user-reset-password").value})});$("#user-password-dialog").close();$("#user-password-form").reset();note("Account password reset")}catch(error){note(error.message)}finally{button.disabled=false}};
 
