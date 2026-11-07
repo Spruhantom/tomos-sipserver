@@ -83,6 +83,7 @@ jobs:
           ./configure --with-asterisk=/usr
           make -j2
           make install
+          make install-headers
       - name: Configure TomOS test extensions
         run: |
           groupadd --system asterisk || true
