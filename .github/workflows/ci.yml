@@ -80,7 +80,7 @@ jobs:
           git -C /usr/src/chan_sccp fetch --depth 1 origin "$SCCP_COMMIT"
           git -C /usr/src/chan_sccp checkout --detach "$SCCP_COMMIT"
           cd /usr/src/chan_sccp
-          ./configure
+          ./configure --with-asterisk=/usr
           make -j2
           make install
       - name: Configure TomOS test extensions
