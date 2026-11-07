@@ -768,7 +768,7 @@ def create_app(
             "mac": mac, "extension": payload.extension, "model": model,
             "server_host": host, "inventory_status": "registered",
             "sccp_config_status": "generated",
-            "tftp_profile_status": "not_configured",
+            "tftp_profile_status": "generated",
             "hardware_test_status": "not_tested",
         }
 
