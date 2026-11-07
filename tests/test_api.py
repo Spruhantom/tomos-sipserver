@@ -130,16 +130,18 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_dashboard_login_rate_limits_repeated_failures_and_clears_after_success(self):
+        for _ in range(4):
+            response = self.client.post("/api/v1/auth/login", json={"password": "incorrect"})
+            self.assertEqual(response.status_code, 401)
+        accepted = self.client.post("/api/v1/auth/login", json={"password": "admin-test-password-0123456789"})
+        self.assertEqual(accepted.status_code, 200)
+        self.assertEqual(self.client.post("/api/v1/auth/logout").status_code, 200)
         for _ in range(5):
             response = self.client.post("/api/v1/auth/login", json={"password": "incorrect"})
             self.assertEqual(response.status_code, 401)
         limited = self.client.post("/api/v1/auth/login", json={"password": "incorrect"})
         self.assertEqual(limited.status_code, 429)
         self.assertIn("Retry-After", limited.headers)
-        accepted = self.client.post("/api/v1/auth/login", json={"password": "admin-test-password-0123456789"})
-        self.assertEqual(accepted.status_code, 200)
-        self.assertEqual(self.client.post("/api/v1/auth/logout").status_code, 200)
-        self.assertEqual(self.client.post("/api/v1/auth/login", json={"password": "incorrect"}).status_code, 401)
 
     def test_duplicate_extension_is_rejected(self):
         payload = {"extension": "121", "display_name": "Desk"}
