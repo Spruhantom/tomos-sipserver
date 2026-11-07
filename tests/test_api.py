@@ -260,6 +260,43 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertEqual(self.client.post(f"/api/v1/users/{user_id}/password", headers={"X-Tomos-CSRF":csrf},
                                           json={"password":"new-strong-password-123"}).status_code, 200)
 
+    def test_account_actions_are_audited_without_password_material(self):
+        login = self.client.post("/api/v1/auth/login", json={"username":"admin","password":"admin-test-password-0123456789"})
+        headers = {"X-Tomos-CSRF": login.cookies.get("tomos_csrf")}
+        created = self.client.post("/api/v1/users", headers=headers,
+                                   json={"username":"audit-user","password":"audit-password-123456","role":"viewer"})
+        self.assertEqual(created.status_code, 201, created.text)
+        user_id = created.json()["id"]
+        self.assertEqual(self.client.patch(f"/api/v1/users/{user_id}", headers=headers,
+                                           json={"role":"operator","enabled":False}).status_code, 200)
+        self.assertEqual(self.client.post(f"/api/v1/users/{user_id}/password", headers=headers,
+                                          json={"password":"replacement-audit-password"}).status_code, 200)
+        events = self.client.get("/api/v1/audit?limit=20")
+        self.assertEqual(events.status_code, 200, events.text)
+        payload = events.json()
+        actions = [event["action"] for event in payload["events"]]
+        self.assertIn("user.created", actions)
+        self.assertIn("user.role_changed", actions)
+        self.assertIn("user.disabled", actions)
+        self.assertIn("user.password_reset", actions)
+        self.assertTrue(all(event["actor_username"] == "admin" for event in payload["events"]))
+        self.assertTrue(all(event["target_username"] == "audit-user" for event in payload["events"]))
+        self.assertNotIn("audit-password-123456", events.text)
+        self.assertNotIn("replacement-audit-password", events.text)
+        self.assertNotIn("password_hash", events.text)
+
+    def test_audit_log_is_admin_only_and_paginated(self):
+        login = self.client.post("/api/v1/auth/login", json={"username":"admin","password":"admin-test-password-0123456789"})
+        self.client.post("/api/v1/users", headers={"X-Tomos-CSRF":login.cookies.get("tomos_csrf")},
+                         json={"username":"audit-viewer","password":"audit-viewer-password","role":"viewer"})
+        viewer = TestClient(self.client.app)
+        viewer.post("/api/v1/auth/login", json={"username":"audit-viewer","password":"audit-viewer-password"})
+        self.assertEqual(viewer.get("/api/v1/audit").status_code, 403)
+        result = self.client.get("/api/v1/audit?limit=1")
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(len(result.json()["events"]), 1)
+        self.assertGreaterEqual(result.json()["total"], 1)
+
     def test_user_can_change_own_password(self):
         login = self.client.post("/api/v1/auth/login", json={"username":"admin","password":"admin-test-password-0123456789"})
         self.assertEqual(login.status_code, 200)
