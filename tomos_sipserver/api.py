@@ -26,6 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .db import DEFAULT_DB, connect, initialize_database
 from .yealink import normalize_mac, normalize_model, render_yealink_cfg, validate_server_host
+from .grandstream import normalize_model as normalize_grandstream_model, render_grandstream_xml
 
 EXTENSION_PATTERN = r"^[1-9][0-9]{2,5}$"
 PASSWORD_PATTERN = r"^[A-Za-z0-9._~-]{24,128}$"
@@ -64,6 +65,14 @@ class YealinkDeviceCreate(BaseModel):
     extension: str = Field(pattern=EXTENSION_PATTERN)
     mac: str = Field(min_length=12, max_length=17)
     model: str = Field(default="SIP-T46U", min_length=2, max_length=32, pattern=r"^[A-Za-z0-9-]+$")
+    server_host: str = Field(min_length=1, max_length=253)
+
+
+class GrandstreamDeviceCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    extension: str = Field(pattern=EXTENSION_PATTERN)
+    mac: str = Field(min_length=12, max_length=17)
+    model: str = Field(default="GRP2601", min_length=2, max_length=32, pattern=r"^[A-Za-z0-9-]+$")
     server_host: str = Field(min_length=1, max_length=253)
 
 
@@ -533,6 +542,141 @@ def create_app(
                                  headers={"Cache-Control": "no-store, private",
                                           "Pragma": "no-cache",
                                           "X-Content-Type-Options": "nosniff"})
+
+    @app.post("/api/v1/devices/grandstream", status_code=status.HTTP_201_CREATED,
+              dependencies=[Depends(require_token)], tags=["Grandstream provisioning"])
+    def register_grandstream_device(payload: GrandstreamDeviceCreate):
+        """Register a Grandstream GRP260x phone and issue one-time provisioning credentials."""
+        try:
+            mac = normalize_mac(payload.mac)
+            host = validate_server_host(payload.server_host)
+            model = normalize_grandstream_model(payload.model)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        username = "tomos-" + mac.lower()
+        password = secrets.token_urlsafe(32)
+        now = _utc_now()
+        with connect(db_path) as connection:
+            extension_row = connection.execute(
+                "SELECT enabled FROM extensions WHERE extension = ?", (payload.extension,)
+            ).fetchone()
+            if extension_row is None:
+                raise HTTPException(status_code=404, detail="Extension not found")
+            if not extension_row["enabled"]:
+                raise HTTPException(status_code=409, detail="Enable the SIP extension before provisioning a phone")
+            try:
+                connection.execute(
+                    """INSERT INTO grandstream_devices
+                       (mac, extension, model, server_host, provisioning_password_hash, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (mac, payload.extension, model, host,
+                     hashlib.sha256(password.encode()).hexdigest(), now),
+                )
+            except sqlite3.IntegrityError as error:
+                raise HTTPException(status_code=409, detail="A Grandstream device with this MAC address is already registered") from error
+        return {
+            "mac": mac, "extension": payload.extension, "model": model,
+            "provisioning_path": f"/provisioning/grandstream/cfg{mac.lower()}.xml",
+            "provisioning_username": username,
+            "provisioning_password": password,
+            "authentication": "HTTP Basic (use HTTPS)",
+            "password_displayed_once": True,
+        }
+
+    @app.post("/api/v1/devices/grandstream/{mac}/credentials",
+              dependencies=[Depends(require_token)], tags=["Grandstream provisioning"])
+    def rotate_grandstream_credentials(mac: str):
+        try:
+            canonical_mac = normalize_mac(mac)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        password = secrets.token_urlsafe(32)
+        with connect(db_path) as connection:
+            cursor = connection.execute(
+                "UPDATE grandstream_devices SET provisioning_password_hash = ?, created_at = ? WHERE mac = ?",
+                (hashlib.sha256(password.encode()).hexdigest(), _utc_now(), canonical_mac),
+            )
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Grandstream device not found")
+        return {
+            "mac": canonical_mac,
+            "provisioning_username": "tomos-" + canonical_mac.lower(),
+            "provisioning_password": password,
+            "password_displayed_once": True,
+        }
+
+    @app.get("/api/v1/devices/grandstream", dependencies=[Depends(require_token)],
+             tags=["Grandstream provisioning"])
+    def list_grandstream_devices():
+        with connect(db_path) as connection:
+            rows = connection.execute(
+                """SELECT d.mac, d.extension, d.model, d.server_host, d.created_at,
+                          e.display_name, e.enabled
+                   FROM grandstream_devices d JOIN extensions e ON e.extension = d.extension
+                   ORDER BY d.mac"""
+            ).fetchall()
+        return [{
+            "mac": row["mac"], "extension": row["extension"],
+            "display_name": row["display_name"], "model": row["model"],
+            "server_host": row["server_host"], "enabled": bool(row["enabled"]),
+            "created_at": row["created_at"],
+        } for row in rows]
+
+    @app.delete("/api/v1/devices/grandstream/{mac}", status_code=status.HTTP_204_NO_CONTENT,
+                dependencies=[Depends(require_token)], tags=["Grandstream provisioning"])
+    def remove_grandstream_device(mac: str):
+        try:
+            canonical_mac = normalize_mac(mac)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        with connect(db_path) as connection:
+            cursor = connection.execute("DELETE FROM grandstream_devices WHERE mac = ?", (canonical_mac,))
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Grandstream device not found")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.get("/provisioning/grandstream/cfg{mac}.xml", tags=["Grandstream provisioning"])
+    def grandstream_configuration(
+        mac: str, request: Request,
+        credentials: HTTPBasicCredentials | None = Depends(provisioning_security),
+    ):
+        """Serve a per-MAC Grandstream XML profile using per-device HTTPS Basic auth."""
+        if request.url.scheme != "https" and request.headers.get("x-forwarded-proto", "").lower() != "https":
+            raise HTTPException(status_code=400, detail="Grandstream provisioning requires HTTPS")
+        try:
+            canonical_mac = normalize_mac(mac)
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail="Provisioning profile not found") from error
+        if credentials is None:
+            raise HTTPException(status_code=401, detail="Provisioning authentication required",
+                                headers={"WWW-Authenticate": "Basic"})
+        with connect(db_path) as connection:
+            row = connection.execute(
+                """SELECT d.extension, d.server_host, d.provisioning_password_hash,
+                          e.display_name, e.password, e.enabled
+                   FROM grandstream_devices d JOIN extensions e ON e.extension = d.extension
+                   WHERE d.mac = ?""", (canonical_mac,)
+            ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Provisioning profile not found")
+        expected_user = "tomos-" + canonical_mac.lower()
+        supplied_hash = hashlib.sha256(credentials.password.encode()).hexdigest()
+        if (not secrets.compare_digest(credentials.username, expected_user)
+                or not secrets.compare_digest(supplied_hash, row["provisioning_password_hash"])):
+            raise HTTPException(status_code=401, detail="Invalid provisioning credentials",
+                                headers={"WWW-Authenticate": "Basic"})
+        if not row["enabled"]:
+            raise HTTPException(status_code=410, detail="The assigned SIP extension is disabled")
+        try:
+            config = render_grandstream_xml(
+                mac=canonical_mac, extension=row["extension"], display_name=row["display_name"],
+                sip_password=row["password"], server_host=row["server_host"],
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=500, detail="Unable to render device configuration") from error
+        return Response(content=config, media_type="application/xml",
+                        headers={"Cache-Control": "no-store, private", "Pragma": "no-cache",
+                                 "X-Content-Type-Options": "nosniff"})
 
     @app.get("/api/v1/extensions/{extension}/provisioning", dependencies=[Depends(require_token)], tags=["provisioning"])
     def extension_provisioning(extension: str):
