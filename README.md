@@ -4,7 +4,7 @@ A self-hosted home telephone system for Debian 13, built around Asterisk with a 
 
 ## Current status
 
-The Debian 13 Asterisk foundation passes CI; CI now also builds and integration-checks the initial Cisco SCCP driver. The installer builds Asterisk 22 LTS and the pinned AI3I/chan_sccp driver, while retaining PJSIP for ordinary SIP phones. The repository includes an authenticated FastAPI extension-management API, SQLite persistence, a privileged configuration-apply helper and systemd units. The dashboard provides extension management, live registration status, call history and Yealink, Grandstream and Polycom provisioning workflows. SCCP is currently at driver-foundation stage: the module is loaded and its CLI is checked, but Cisco device registration, model-specific SEP XML generation and TFTP delivery are the next implementation stage. Physical Cisco handset and firmware compatibility remain unverified. Asterisk writes call-detail records to a separate local SQLite database; call audio is not recorded.
+The Debian 13 Asterisk foundation passes CI; CI now also builds and integration-checks the initial Cisco SCCP driver. The installer builds Asterisk 22 LTS and the pinned AI3I/chan_sccp driver, while retaining PJSIP for ordinary SIP phones. The repository includes an authenticated FastAPI extension-management API, SQLite persistence, a privileged configuration-apply helper and systemd units. The dashboard provides extension management, live registration status, call history and Yealink, Grandstream and Polycom provisioning workflows. SCCP is currently at driver-foundation stage: the module is loaded and its CLI is checked, but Cisco handset inventory is now being added for the initial 7940, 7960 and 7970 target models; model-specific SEP XML generation and controlled TFTP delivery remain subsequent stages. Physical Cisco handset and firmware compatibility remain unverified. Asterisk writes call-detail records to a separate local SQLite database; call audio is not recorded.
 
 ## Install (Debian 13 only)
 
@@ -55,6 +55,9 @@ The dashboard is served at `http://127.0.0.1:8000/`. Sign in using the one-time 
 - `POST /api/v1/extensions/{extension}/password` — rotate the SIP password and return it once.
 - `POST /api/v1/extensions/{extension}/enable` and `/disable` — enable or disable registration.
 - `DELETE /api/v1/extensions/{extension}` — delete an extension.
+- `POST /api/v1/devices/cisco` — add a Cisco SCCP handset to inventory. Initial model allowlist: 7940, 7960 and 7970. Body: `{"extension":"100","mac":"001122AABBCC","model":"7940","server_host":"192.168.1.10"}`. This records an assignment only; it does not yet generate SEP XML, publish TFTP files, or prove handset compatibility.
+- `GET /api/v1/devices/cisco` — list Cisco handset inventory, including explicit `not_configured` provisioning and `not_tested` hardware states.
+- `DELETE /api/v1/devices/cisco/{mac}` — remove a Cisco handset from inventory.
 - `POST /api/v1/devices/yealink` — register a Yealink phone against an enabled extension. Supply `extension`, `mac`, `model` and `server_host`. The response displays a unique HTTP Basic provisioning password once.
 - `GET /api/v1/devices/yealink` — list registered Yealink devices without provisioning secrets.
 - `POST /api/v1/devices/yealink/{mac}/credentials` — rotate a device's provisioning password and immediately revoke its previous password. The replacement is returned once.
