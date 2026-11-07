@@ -34,6 +34,10 @@ def update_bootstrap_admin_credentials(
             (old_username,),
         ).fetchone()
         if row is None:
+            account_count = connection.execute("SELECT COUNT(*) FROM admin_users").fetchone()[0]
+            if account_count == 0:
+                # A fresh database will be bootstrapped from api.env when the API starts.
+                return
             raise LookupError(
                 f"Bootstrap administrator {old_username!r} was not found; manage accounts in the dashboard"
             )
