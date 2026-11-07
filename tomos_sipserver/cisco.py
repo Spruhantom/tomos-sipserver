@@ -135,16 +135,16 @@ def _add_srst(pool: ET.Element, *, modern: bool) -> None:
 
 def _add_locale(device: ET.Element, *, modern: bool) -> None:
     locale = ET.SubElement(device, "userLocale")
-    _set_text(locale, "name", "English_United_Kingdom")
-    _set_text(locale, "uid", "1")
-    _set_text(locale, "langCode", "en_GB")
-    _set_text(locale, "version", "7.1.0.1(1)")
-    _set_text(locale, "winCharSet", "iso-8859-1")
+    _set_text(locale, "name", "English_United_States" if modern else "English_United_Kingdom")
+    _set_text(locale, "uid", "39" if modern else "1")
+    _set_text(locale, "langCode", "en_US" if modern else "en_GB")
+    _set_text(locale, "version", "9.3(2.9902)US" if modern else "7.1.0.1(1)")
+    _set_text(locale, "winCharSet", "utf-8" if modern else "iso-8859-1")
     _set_text(device, "networkLocale", "United_Kingdom")
     info = ET.SubElement(device, "networkLocaleInfo")
     _set_text(info, "name", "United_Kingdom")
     _set_text(info, "uid", "64")
-    _set_text(info, "version", "7.1.0.1(1)")
+    _set_text(info, "version", "4.0(1)" if modern else "7.1.0.1(1)")
 
 
 def _render_7940_7960(host: str, port: int) -> ET.Element:
