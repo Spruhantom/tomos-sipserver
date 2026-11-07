@@ -47,8 +47,14 @@ The PBX listens on UDP 5060 for SIP, TCP 2000 for SCCP, and UDP 10000-20000 for 
 
 ## Extension management API
 
-The dashboard is served at `http://127.0.0.1:8000/`. Sign in using the administrator username and password shown in `/root/tomos-sip-dashboard-username.txt` and `/root/tomos-sip-dashboard-password.txt`. The dashboard uses short-lived HttpOnly, SameSite=Strict session cookies plus a CSRF header for mutations; the browser never receives the API bearer token. The API remains localhost-only; never expose port 8000 directly to an untrusted network. For remote access, place it behind a trusted HTTPS reverse proxy and enable `TOMOS_COOKIE_SECURE=true` in `/etc/tomos-sipserver/api.env` before restarting the API.
+The dashboard is served at `http://127.0.0.1:8000/`. Sign in using the administrator username and password shown in `/root/tomos-sip-dashboard-username.txt` and `/root/tomos-sip-dashboard-password.txt`. The dashboard uses short-lived HttpOnly, SameSite=Strict session cookies plus a CSRF header for mutations; the browser never receives the API bearer token. Dashboard accounts are stored in SQLite using PBKDF2-HMAC-SHA256 password hashes. The installer credentials bootstrap the first administrator only; subsequent logins use the account database. Roles are `admin` (full access), `operator` (PBX and device operations) and `viewer` (read-only). The API remains localhost-only; never expose port 8000 directly to an untrusted network. For remote access, place it behind a trusted HTTPS reverse proxy and enable `TOMOS_COOKIE_SECURE=true` in `/etc/tomos-sipserver/api.env` before restarting the API.
 
+- `GET /api/v1/users` — list dashboard accounts (administrators only; password hashes are never returned).
+- `POST /api/v1/users` — create an `admin`, `operator` or `viewer` account with a password of at least 12 characters.
+- `PATCH /api/v1/users/{id}` — change a user's role or enable/disable the account. The last active administrator cannot be demoted or disabled.
+- `DELETE /api/v1/users/{id}` — delete an account. The last active administrator and the currently signed-in account are protected.
+- `POST /api/v1/users/{id}/password` — reset a user's password (administrators only).
+- `POST /api/v1/auth/password` — change the signed-in user's password after verifying the current password.
 - `GET /api/v1/extensions` — list extensions without exposing SIP passwords.
 - `POST /api/v1/extensions` — create an extension; a generated SIP password is returned once. Body: `{"extension":"120","display_name":"Office"}`.
 - `PATCH /api/v1/extensions/{extension}` — update `display_name` or `enabled`.
@@ -106,7 +112,7 @@ Each mutation regenerates PJSIP and dialplan configuration and requests an Aster
 
 1. **Foundation (passed CI):** Debian 13 source-build installer, Asterisk, PJSIP, internal extensions, systemd and CI.
 2. **Extension API (current):** authenticated FastAPI CRUD, SQLite persistence, password rotation, enable/disable and configuration rollback.
-3. **Dashboard (initial release):** password login, session/CSRF protection, extension listing, create, enable/disable, delete and one-time password reset display. Device registration, generic SIP setup notes and searchable call history, date/number/result filters and CSV export are now included.
+3. **Dashboard (initial release):** password login, session/CSRF protection, extension listing, create, enable/disable, delete and one-time password reset display. Multi-user backend now supports administrator, operator and read-only roles, PBKDF2 password hashes, account enable/disable, password resets and last-admin safeguards; dashboard account-management screens remain to be added. Device registration, generic SIP setup notes and searchable call history, date/number/result filters and CSV export are now included.
 4. **Vendor provisioning (in progress):** Yealink, Grandstream and Polycom MAC-specific provisioning workflows are implemented with per-device credentials. Cisco SCCP driver foundation is now included; next: device registry, chan_sccp configuration generation, model-specific `SEP<MAC>.cnf.xml` files and TFTP delivery. Physical handset and firmware validation remains outstanding.
 5. Browser phone: SIP.js, WSS, SRTP and persistent in-dashboard call controls.
 6. Home features: voicemail, call history, groups, forwarding, DND, backups and restore.
