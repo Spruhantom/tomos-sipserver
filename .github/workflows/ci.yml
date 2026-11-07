@@ -216,6 +216,23 @@ jobs:
           curl --fail --silent --show-error --user "$YEALINK_USER:$YEALINK_NEW_PASSWORD" \
             -H 'X-Forwarded-Proto: https' "http://127.0.0.1:8000$YEALINK_PATH" | grep -Fq 'account.1.user_name = 120'
 
+          GRANDSTREAM_CREATED="$(curl --fail --silent --show-error -X POST http://127.0.0.1:8000/api/v1/devices/grandstream \
+            -H "$AUTH_HEADER" -H 'Content-Type: application/json' \
+            -d '{"extension":"120","mac":"00:0b:82:12:34:56","model":"GRP2601","server_host":"127.0.0.1"}')"
+          GRANDSTREAM_PATH="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["provisioning_path"])' <<<"$GRANDSTREAM_CREATED")"
+          GRANDSTREAM_USER="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["provisioning_username"])' <<<"$GRANDSTREAM_CREATED")"
+          GRANDSTREAM_PASSWORD="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["provisioning_password"])' <<<"$GRANDSTREAM_CREATED")"
+          GRANDSTREAM_XML="$(curl --fail --silent --show-error --user "$GRANDSTREAM_USER:$GRANDSTREAM_PASSWORD" \
+            -H 'X-Forwarded-Proto: https' "http://127.0.0.1:8000$GRANDSTREAM_PATH")"
+          python3 -c 'import sys,xml.etree.ElementTree as ET; root=ET.fromstring(sys.stdin.read()); assert root.findtext("mac")=="000b82123456"; items={x.attrib["name"]:x.text for x in root.findall("./config/item")}; assert items["account.1.sip.userid"]=="120"; assert items["account.1.sip.subscriber.password"]==sys.argv[1]; assert items["account.1.sip.server.1.address"]=="127.0.0.1:5060"' "$YEALINK_SIP_PASSWORD" <<<"$GRANDSTREAM_XML"
+          GRANDSTREAM_ROTATED="$(curl --fail --silent --show-error -X POST "http://127.0.0.1:8000/api/v1/devices/grandstream/000b82123456/credentials" -H "$AUTH_HEADER")"
+          GRANDSTREAM_NEW_PASSWORD="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["provisioning_password"])' <<<"$GRANDSTREAM_ROTATED")"
+          GRANDSTREAM_OLD_STATUS="$(curl --silent --output /dev/null --write-out '%{http_code}' --user "$GRANDSTREAM_USER:$GRANDSTREAM_PASSWORD" \
+            -H 'X-Forwarded-Proto: https' "http://127.0.0.1:8000$GRANDSTREAM_PATH")"
+          test "$GRANDSTREAM_OLD_STATUS" = "401"
+          curl --fail --silent --show-error --user "$GRANDSTREAM_USER:$GRANDSTREAM_NEW_PASSWORD" \
+            -H 'X-Forwarded-Proto: https' "http://127.0.0.1:8000$GRANDSTREAM_PATH" | grep -Fq '<gs_provision'
+
           LIST="$(curl --fail --silent --show-error http://127.0.0.1:8000/api/v1/extensions -H "$AUTH_HEADER")"
           grep -Fq '"extension":"120"' <<<"$LIST"
           if grep -Fq 'sip_password' <<<"$LIST"; then
