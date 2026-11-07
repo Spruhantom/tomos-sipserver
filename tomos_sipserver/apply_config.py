@@ -16,7 +16,7 @@ APP_DIR = Path(__file__).resolve().parent.parent
 RENDERER_PATH = APP_DIR / "render-config.py"
 DB_PATH = Path("/var/lib/tomos-sipserver/extensions.db")
 CONFIG_DIR = Path("/etc/asterisk")
-SCCP_CONFIG_PATH = CONFIG_DIR / "tomos-devices.conf"
+SCCP_CONFIG_PATH = CONFIG_DIR / "tomos-sccp-devices.conf"
 TFTP_DIR = Path("/var/lib/tftpboot")
 
 
