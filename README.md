@@ -35,7 +35,7 @@ It then:
 - Installs FastAPI and initializes the SQLite extension database at `/var/lib/tomos-sipserver/extensions.db` (mode 0600).
 - Enables Asterisk CDR with the `cdr_sqlite3_custom` backend and stores call metadata in `/var/lib/tomos-sipserver/cdr/cdr.db`; no audio is recorded.
 - Preserves existing extension 100/101 credentials when the installer is rerun.
-- Generates an API bearer token in `/root/tomos-sip-api-token.txt` and a separate dashboard password in `/root/tomos-sip-dashboard-password.txt` (both mode 0600).
+- Generates an API bearer token in `/root/tomos-sip-api-token.txt` and stores the dashboard administrator username and password in `/root/tomos-sip-dashboard-username.txt` and `/root/tomos-sip-dashboard-password.txt` (mode 0600). On an interactive first install, the installer prompts for both dashboard credentials; passwords are hidden while typed and must be at least 24 characters. On upgrades, existing credentials are preserved when the password prompt is left blank. In non-interactive installs, a strong random password is generated.
 - Serves the dashboard and API on `127.0.0.1:8000`; it is not exposed directly to the LAN.
 - Installs a narrowly-scoped sudo helper for validated PJSIP configuration generation and reload.
 - Loads `chan_sccp.so`, disables the conflicting built-in `chan_skinny.so`, and installs the initial SCCP listener configuration in `/etc/asterisk/sccp.conf`.
@@ -47,7 +47,7 @@ The PBX listens on UDP 5060 for SIP, TCP 2000 for SCCP, and UDP 10000-20000 for 
 
 ## Extension management API
 
-The dashboard is served at `http://127.0.0.1:8000/`. Sign in using the one-time generated password in `/root/tomos-sip-dashboard-password.txt`. The dashboard uses short-lived HttpOnly, SameSite=Strict session cookies plus a CSRF header for mutations; the browser never receives the API bearer token. The API remains localhost-only; never expose port 8000 directly to an untrusted network. For remote access, place it behind a trusted HTTPS reverse proxy and enable `TOMOS_COOKIE_SECURE=true` in `/etc/tomos-sipserver/api.env` before restarting the API.
+The dashboard is served at `http://127.0.0.1:8000/`. Sign in using the administrator username and password shown in `/root/tomos-sip-dashboard-username.txt` and `/root/tomos-sip-dashboard-password.txt`. The dashboard uses short-lived HttpOnly, SameSite=Strict session cookies plus a CSRF header for mutations; the browser never receives the API bearer token. The API remains localhost-only; never expose port 8000 directly to an untrusted network. For remote access, place it behind a trusted HTTPS reverse proxy and enable `TOMOS_COOKIE_SECURE=true` in `/etc/tomos-sipserver/api.env` before restarting the API.
 
 - `GET /api/v1/extensions` — list extensions without exposing SIP passwords.
 - `POST /api/v1/extensions` — create an extension; a generated SIP password is returned once. Body: `{"extension":"120","display_name":"Office"}`.
