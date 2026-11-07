@@ -758,10 +758,17 @@ def create_app(
                 )
             except sqlite3.IntegrityError as error:
                 raise HTTPException(status_code=409, detail="A Cisco device with this MAC address is already registered") from error
+        try:
+            apply()
+        except Exception as error:
+            with connect(db_path) as connection:
+                connection.execute("DELETE FROM cisco_devices WHERE mac = ?", (mac,))
+            raise HTTPException(status_code=503, detail="Cisco SCCP configuration could not be applied") from error
         return {
             "mac": mac, "extension": payload.extension, "model": model,
             "server_host": host, "inventory_status": "registered",
-            "provisioning_status": "not_configured",
+            "sccp_config_status": "generated",
+            "tftp_profile_status": "not_configured",
             "hardware_test_status": "not_tested",
         }
 
@@ -780,7 +787,8 @@ def create_app(
             "display_name": row["display_name"], "model": row["model"],
             "server_host": row["server_host"], "enabled": bool(row["enabled"]),
             "created_at": row["created_at"],
-            "provisioning_status": "not_configured",
+            "sccp_config_status": "generated" if row["enabled"] else "not_generated",
+            "tftp_profile_status": "not_configured",
             "hardware_test_status": "not_tested",
         } for row in rows]
 
@@ -792,9 +800,23 @@ def create_app(
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         with connect(db_path) as connection:
-            cursor = connection.execute("DELETE FROM cisco_devices WHERE mac = ?", (canonical_mac,))
-            if cursor.rowcount == 0:
+            row = connection.execute(
+                "SELECT mac, extension, model, server_host, created_at FROM cisco_devices WHERE mac = ?",
+                (canonical_mac,),
+            ).fetchone()
+            if row is None:
                 raise HTTPException(status_code=404, detail="Cisco device not found")
+            connection.execute("DELETE FROM cisco_devices WHERE mac = ?", (canonical_mac,))
+        try:
+            apply()
+        except Exception as error:
+            with connect(db_path) as connection:
+                connection.execute(
+                    """INSERT INTO cisco_devices (mac, extension, model, server_host, created_at)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    tuple(row),
+                )
+            raise HTTPException(status_code=503, detail="Cisco SCCP configuration could not be applied") from error
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post("/api/v1/devices/yealink", status_code=status.HTTP_201_CREATED,
