@@ -271,6 +271,7 @@ class ExtensionApiTests(unittest.TestCase):
                                            json={"role":"operator","enabled":False}).status_code, 200)
         self.assertEqual(self.client.post(f"/api/v1/users/{user_id}/password", headers=headers,
                                           json={"password":"replacement-audit-password"}).status_code, 200)
+        self.assertEqual(self.client.delete(f"/api/v1/users/{user_id}", headers=headers).status_code, 204)
         events = self.client.get("/api/v1/audit?limit=20")
         self.assertEqual(events.status_code, 200, events.text)
         payload = events.json()
@@ -279,6 +280,7 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertIn("user.role_changed", actions)
         self.assertIn("user.disabled", actions)
         self.assertIn("user.password_reset", actions)
+        self.assertIn("user.deleted", actions)
         self.assertTrue(all(event["actor_username"] == "admin" for event in payload["events"]))
         self.assertTrue(all(event["target_username"] == "audit-user" for event in payload["events"]))
         self.assertNotIn("audit-password-123456", events.text)
