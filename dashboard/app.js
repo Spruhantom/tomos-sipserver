@@ -128,7 +128,7 @@ $('#yealink-form').onsubmit=async e=>{
   finally{button.disabled=false}
 };
 $('#copy-yealink-details').onclick=async()=>{
-  const details='Provisioning URL: '+$('#yealink-result-url').value+'\\nUsername: '+$('#yealink-result-user').value+'\\nPassword: '+$('#yealink-result-password').value;
+  const details='Provisioning URL: '+$('#yealink-result-url').value+'\nUsername: '+$('#yealink-result-user').value+'\nPassword: '+$('#yealink-result-password').value;
   try{await navigator.clipboard.writeText(details);note('Yealink provisioning details copied')}
   catch(e){note('Could not copy provisioning details')}
 };
