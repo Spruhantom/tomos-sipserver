@@ -92,6 +92,8 @@ jobs:
           install -m 0644 asterisk/asterisk.conf /etc/asterisk/asterisk.conf
           install -m 0644 asterisk/modules.conf /etc/asterisk/modules.conf
           install -m 0640 asterisk/sccp.conf /etc/asterisk/sccp.conf
+          chown root:asterisk /etc/asterisk/sccp.conf
+          install -o root -g asterisk -m 0640 /dev/null /etc/asterisk/tomos-sccp-devices.conf
           install -m 0644 asterisk/logger.conf /etc/asterisk/logger.conf
           install -m 0644 asterisk/rtp.conf /etc/asterisk/rtp.conf
           install -m 0644 asterisk/cdr.conf /etc/asterisk/cdr.conf
