@@ -194,6 +194,28 @@ jobs:
             -H "$AUTH_HEADER" -H 'Content-Type: application/json' \
             -d '{"extension":"120","display_name":"CI Test Phone"}')"
           grep -Fq '"extension":"120"' <<<"$CREATED"
+
+          YEALINK_CREATED="$(curl --fail --silent --show-error -X POST http://127.0.0.1:8000/api/v1/devices/yealink \
+            -H "$AUTH_HEADER" -H 'Content-Type: application/json' \
+            -d '{"extension":"120","mac":"00:15:65:aa:bb:cc","model":"SIP-T46U","server_host":"127.0.0.1"}')"
+          YEALINK_PATH="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["provisioning_path"])' <<<"$YEALINK_CREATED")"
+          YEALINK_USER="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["provisioning_username"])' <<<"$YEALINK_CREATED")"
+          YEALINK_PASSWORD="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["provisioning_password"])' <<<"$YEALINK_CREATED")"
+          YEALINK_CFG="$(curl --fail --silent --show-error --user "$YEALINK_USER:$YEALINK_PASSWORD" \
+            -H 'X-Forwarded-Proto: https' "http://127.0.0.1:8000$YEALINK_PATH")"
+          grep -Fq '#!version:1.0.0.1' <<<"$YEALINK_CFG"
+          grep -Fq 'account.1.user_name = 120' <<<"$YEALINK_CFG"
+          YEALINK_SIP_PASSWORD="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["sip_password"])' <<<"$CREATED")"
+          grep -Fq "account.1.password = $YEALINK_SIP_PASSWORD" <<<"$YEALINK_CFG"
+
+          YEALINK_ROTATED="$(curl --fail --silent --show-error -X POST "http://127.0.0.1:8000/api/v1/devices/yealink/001565aabbcc/credentials" -H "$AUTH_HEADER")"
+          YEALINK_NEW_PASSWORD="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["provisioning_password"])' <<<"$YEALINK_ROTATED")"
+          OLD_CREDENTIAL_STATUS="$(curl --silent --output /dev/null --write-out '%{http_code}' --user "$YEALINK_USER:$YEALINK_PASSWORD" \
+            -H 'X-Forwarded-Proto: https' "http://127.0.0.1:8000$YEALINK_PATH")"
+          test "$OLD_CREDENTIAL_STATUS" = "401"
+          curl --fail --silent --show-error --user "$YEALINK_USER:$YEALINK_NEW_PASSWORD" \
+            -H 'X-Forwarded-Proto: https' "http://127.0.0.1:8000$YEALINK_PATH" | grep -Fq 'account.1.user_name = 120'
+
           LIST="$(curl --fail --silent --show-error http://127.0.0.1:8000/api/v1/extensions -H "$AUTH_HEADER")"
           grep -Fq '"extension":"120"' <<<"$LIST"
           if grep -Fq 'sip_password' <<<"$LIST"; then
