@@ -62,6 +62,11 @@ The dashboard is served at `http://127.0.0.1:8000/`. Sign in using the one-time 
 - `GET /api/v1/devices/grandstream` — list registered Grandstream devices without provisioning secrets.
 - `POST /api/v1/devices/grandstream/{mac}/credentials` — rotate the device provisioning password and immediately revoke the old one.
 - `DELETE /api/v1/devices/grandstream/{mac}` — revoke a phone's provisioning access.
+- `POST /api/v1/devices/polycom` — register a Polycom VVX SIP phone (initial allowlist: VVX150/250/300/310/350/410/450/500/501/600/601/1500) and issue a one-time per-device HTTP Basic password. Optional SIP port and UDP/TCP/TLS transport are configurable.
+- `GET /api/v1/devices/polycom` — list Polycom devices without provisioning secrets.
+- `POST /api/v1/devices/polycom/{mac}/credentials` — rotate a Polycom device provisioning password.
+- `DELETE /api/v1/devices/polycom/{mac}` — revoke Polycom provisioning access.
+- `GET /provisioning/polycom/{mac}.cfg` — serve a MAC-specific Polycom VVX XML profile over HTTPS using per-device Basic authentication.
 - `GET /provisioning/grandstream/cfg{mac}.xml` — serve the Grandstream MAC-specific XML profile (lowercase MAC filename), authenticated with per-device Basic credentials over HTTPS. The XML uses Grandstream account aliases for SIP server, user ID, authentication ID/password and display name.
 - `GET /provisioning/yealink/{MAC}.cfg` — serve the generated Yealink CFG file. The phone must authenticate with its per-device HTTP Basic credentials over HTTPS. Configure the phone with the provisioning directory URL (`https://HOST/provisioning/yealink/`); Yealink then requests its lowercase MAC-specific CFG filename. The generated file starts with the required `#!version:1.0.0.1` header. The initial supported model allowlist covers selected SIP-T30/T31/T33/T40/T41/T42/T43/T46/T48/T53/T54/T57/T58 models; unsupported models are rejected rather than silently receiving an unverified profile.
 - `GET /api/v1/calls?limit=50&offset=0&start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&number=100&disposition=ANSWERED` — read filtered call-detail records (maximum 100 per page). Date bounds are inclusive; number matches caller ID, source or destination.
