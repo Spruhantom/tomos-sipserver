@@ -2,6 +2,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -22,7 +23,7 @@ class ApplyConfigTests(unittest.TestCase):
             connection.execute("CREATE TABLE extensions (extension TEXT, password TEXT, enabled INTEGER, display_name TEXT)")
             connection.executemany(
                 "INSERT INTO extensions VALUES (?, ?, ?, ?)",
-                [("100", "a" * 32, 1, "Front Desk"), ("101", "b" * 32, 0, "Disabled")],
+                [("100", "a" * 32, 1, "Front Desk"), ("101", "b" * 32, 0, "Disabled"), ("102", "c" * 32, 1, "Reception")],
             )
             connection.execute(
                 """CREATE TABLE cisco_devices (
@@ -32,6 +33,10 @@ class ApplyConfigTests(unittest.TestCase):
             connection.execute(
                 "INSERT INTO cisco_devices VALUES (?, ?, ?, ?, ?)",
                 ("001565AABBCC", "100", "7960", "192.168.1.10", "2026-01-01T00:00:00Z"),
+            )
+            connection.execute(
+                "INSERT INTO cisco_devices VALUES (?, ?, ?, ?, ?)",
+                ("001565AABBDD", "102", "7970", "192.168.1.10", "2026-01-01T00:00:00Z"),
             )
         (self.config / "pjsip.conf").write_text("old pjsip\n")
         (self.config / "extensions.conf").write_text("old dialplan\n")
@@ -72,6 +77,11 @@ class ApplyConfigTests(unittest.TestCase):
         self.assertNotIn("password", sccp.lower())
         self.assertIn("<processNodeName>192.168.1.10</processNodeName>", xml)
         self.assertNotIn("a" * 32, xml)
+        self.assertIsNone(ET.fromstring(xml).find("fullConfig"))
+        modern_xml = (self.tftp / "SEP001565AABBDD.cnf.xml").read_text()
+        modern_root = ET.fromstring(modern_xml)
+        self.assertEqual(modern_root.findtext("deviceProtocol"), "SCCP")
+        self.assertEqual(modern_root.findtext("fullConfig"), "true")
         self.assertEqual((self.tftp / "SEP001565AABBCC.cnf.xml").stat().st_mode & 0o777, 0o644)
 
     def test_removes_stale_managed_tftp_profiles(self):

@@ -30,7 +30,7 @@ from .auth import hash_password, verify_password
 from .yealink import normalize_mac, normalize_model, render_yealink_cfg, validate_server_host
 from .grandstream import normalize_model as normalize_grandstream_model, render_grandstream_xml
 from .polycom import normalize_model as normalize_polycom_model, render_polycom_cfg
-from .cisco import normalize_model as normalize_cisco_model
+from .cisco import model_compatibility, normalize_model as normalize_cisco_model
 
 EXTENSION_PATTERN = r"^[1-9][0-9]{2,5}$"
 PASSWORD_PATTERN = r"^[A-Za-z0-9._~-]{24,128}$"
@@ -731,6 +731,12 @@ def create_app(
         return mutate(operation)
 
 
+    @app.get("/api/v1/devices/cisco/models", dependencies=[Depends(require_token)],
+             tags=["Cisco SCCP provisioning"])
+    def list_cisco_models():
+        """List supported Cisco model/profile families and unverified hardware status."""
+        return [model_compatibility(model) for model in sorted(("7940", "7960", "7970"))]
+
     @app.post("/api/v1/devices/cisco", status_code=status.HTTP_201_CREATED,
               dependencies=[Depends(require_token)], tags=["Cisco SCCP provisioning"])
     def register_cisco_device(payload: CiscoDeviceCreate):
@@ -770,6 +776,7 @@ def create_app(
             "sccp_config_status": "generated",
             "tftp_profile_status": "generated",
             "hardware_test_status": "not_tested",
+            "compatibility": model_compatibility(model),
         }
 
     @app.get("/api/v1/devices/cisco", dependencies=[Depends(require_token)],
@@ -790,6 +797,7 @@ def create_app(
             "sccp_config_status": "generated" if row["enabled"] else "not_generated",
             "tftp_profile_status": "generated",
             "hardware_test_status": "not_tested",
+            "compatibility": model_compatibility(row["model"]),
         } for row in rows]
 
     @app.delete("/api/v1/devices/cisco/{mac}", status_code=status.HTTP_204_NO_CONTENT,
