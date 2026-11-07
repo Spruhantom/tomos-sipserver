@@ -310,7 +310,7 @@ $('#export-calls').onclick=async()=>{
     a.href=url;a.download='tomos-call-history.csv';document.body.append(a);a.click();a.remove();URL.revokeObjectURL(url)
   }catch(err){note(err.message)}
 };
-$('#login-form').onsubmit=async e=>{e.preventDefault();try{await api('/auth/login',{method:'POST',body:JSON.stringify({password:$('#password').value})});csrf=cookie('tomos_csrf');showApp();await refresh()}catch(err){$('#login-error').textContent=err.message}};
+$('#login-form').onsubmit=async e=>{e.preventDefault();try{await api('/auth/login',{method:'POST',body:JSON.stringify({username:$('#username').value,password:$('#password').value})});csrf=cookie('tomos_csrf');showApp();await refresh()}catch(err){$('#login-error').textContent=err.message}};
 $('#logout').onclick=async()=>{try{await api('/auth/logout',{method:'POST'})}finally{csrf='';showLogin()}};
 $('#new-extension').onclick=()=>$('#create-dialog').showModal();
 $('#create-form').onsubmit=async e=>{
