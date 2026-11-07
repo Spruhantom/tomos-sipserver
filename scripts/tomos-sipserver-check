@@ -9,4 +9,7 @@ for extension in 100 101; do
     exit 1
   }
 done
-echo "TomOS SIP foundation is active; PJSIP endpoints 100 and 101 are loaded."
+modules="$(asterisk -rx 'module show like chan_sccp.so' 2>&1)" || { printf '%s\n' "$modules" >&2; exit 1; }
+grep -Fq 'chan_sccp.so' <<<"$modules" || { echo "Cisco SCCP channel driver is not loaded." >&2; printf '%s\n' "$modules" >&2; exit 1; }
+asterisk -rx 'sccp show devices' >/dev/null 2>&1 || { echo "SCCP CLI is unavailable; chan_sccp did not initialise." >&2; exit 1; }
+echo "TomOS SIP foundation is active; PJSIP endpoints 100 and 101 and the Cisco SCCP driver are loaded."

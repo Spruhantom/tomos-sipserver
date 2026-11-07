@@ -4,7 +4,7 @@ A self-hosted home telephone system for Debian 13, built around Asterisk with a 
 
 ## Current status
 
-The Debian 13 Asterisk foundation passes CI. The repository includes a source-build installer for Asterisk 22 LTS, PJSIP endpoints, an authenticated FastAPI extension-management API, SQLite persistence, a privileged configuration-apply helper and systemd units. The dashboard provides extension management, generic SIP setup notes, live registration status, call history and an initial Yealink T-series provisioning workflow. Yealink profiles are generated per MAC address and protected by one-time HTTP Basic credentials; the provisioning endpoint requires HTTPS. Asterisk writes call-detail records to a separate local SQLite database; call audio is not recorded. Physical handset compatibility and end-to-end provisioning tests remain outstanding.
+The Debian 13 Asterisk foundation passes CI; CI now also builds and integration-checks the initial Cisco SCCP driver. The installer builds Asterisk 22 LTS and the pinned AI3I/chan_sccp driver, while retaining PJSIP for ordinary SIP phones. The repository includes an authenticated FastAPI extension-management API, SQLite persistence, a privileged configuration-apply helper and systemd units. The dashboard provides extension management, live registration status, call history and Yealink, Grandstream and Polycom provisioning workflows. SCCP is currently at driver-foundation stage: the module is loaded and its CLI is checked, but Cisco device registration, model-specific SEP XML generation and TFTP delivery are the next implementation stage. Physical Cisco handset and firmware compatibility remain unverified. Asterisk writes call-detail records to a separate local SQLite database; call audio is not recorded.
 
 ## Install (Debian 13 only)
 
@@ -27,7 +27,7 @@ The one-line command downloads the current installer from the repository's `main
 The installer builds the pinned Asterisk 22.12.0 LTS source release because Debian 13 stable does not currently publish the Asterisk PBX package. It verifies the source archive against the SHA-256 digest published with the official Asterisk 22.12.0 GitHub release before compiling.
 
 It then:
-- Installs build dependencies and compiles Asterisk with bundled PJProject.
+- Installs build dependencies and compiles Asterisk with bundled PJProject, then builds and installs the pinned AI3I/chan_sccp channel driver against those Asterisk headers.
 - Creates the `asterisk` and unprivileged `tomos` service accounts.
 - Backs up existing Asterisk configuration files before installing the TomOS base configuration.
 - Creates extensions 100 and 101 with cryptographically random passwords.
@@ -38,11 +38,12 @@ It then:
 - Generates an API bearer token in `/root/tomos-sip-api-token.txt` and a separate dashboard password in `/root/tomos-sip-dashboard-password.txt` (both mode 0600).
 - Serves the dashboard and API on `127.0.0.1:8000`; it is not exposed directly to the LAN.
 - Installs a narrowly-scoped sudo helper for validated PJSIP configuration generation and reload.
+- Loads `chan_sccp.so`, disables the conflicting built-in `chan_skinny.so`, and installs the initial SCCP listener configuration in `/etc/asterisk/sccp.conf`.
 - Enables the Asterisk, health-check and API systemd units.
 
 **Important:** run the installer on a clean Debian 13 machine or VM. Existing Asterisk configuration files are backed up, but the installer replaces the active base configuration files and should not be run over another live PBX without reviewing the migration first.
 
-The PBX listens on UDP 5060 and uses RTP UDP 10000-20000. Keep SIP/RTP on a trusted home LAN or VPN. Do not configure router port forwarding or expose SIP publicly. No SIP trunk, TLS, WebRTC, dashboard or firewall rules are configured yet. Extensions 100 and 101 can call one another. Dial `*65` for the Asterisk echo test.
+The PBX listens on UDP 5060 for SIP, TCP 2000 for SCCP, and UDP 10000-20000 for RTP. Keep all voice traffic on a trusted home LAN or VPN. Do not configure router port forwarding or expose SIP/SCCP publicly. Cisco SCCP device provisioning and TFTP are not enabled yet; the driver is installed and its CLI is checked by CI. Extensions 100 and 101 can call one another. Dial `*65` for the Asterisk echo test.
 
 ## Extension management API
 
@@ -103,12 +104,12 @@ Each mutation regenerates PJSIP and dialplan configuration and requests an Aster
 1. **Foundation (passed CI):** Debian 13 source-build installer, Asterisk, PJSIP, internal extensions, systemd and CI.
 2. **Extension API (current):** authenticated FastAPI CRUD, SQLite persistence, password rotation, enable/disable and configuration rollback.
 3. **Dashboard (initial release):** password login, session/CSRF protection, extension listing, create, enable/disable, delete and one-time password reset display. Device registration, generic SIP setup notes and searchable call history, date/number/result filters and CSV export are now included.
-4. **Vendor provisioning (in progress):** initial Yealink T-series MAC-specific CFG generation, per-device one-time HTTP Basic credentials, HTTPS-only retrieval and dashboard registration workflow are implemented. Next: validate model/firmware parameter compatibility on physical Yealink phones and test HTTPS reverse-proxy deployment. Device credential rotation and dashboard revoke controls are now included. Cisco SCCP remains future work.
+4. **Vendor provisioning (in progress):** Yealink, Grandstream and Polycom MAC-specific provisioning workflows are implemented with per-device credentials. Cisco SCCP driver foundation is now included; next: device registry, chan_sccp configuration generation, model-specific `SEP<MAC>.cnf.xml` files and TFTP delivery. Physical handset and firmware validation remains outstanding.
 5. Browser phone: SIP.js, WSS, SRTP and persistent in-dashboard call controls.
 6. Home features: voicemail, call history, groups, forwarding, DND, backups and restore.
 7. Hardening/release: security review, hardware compatibility matrix and upgrade testing.
 
 ## Tests
 
-GitHub Actions runs Python renderer, API and Yealink provisioning tests, Bash syntax/ShellCheck checks, and a Debian 13 job that downloads and verifies the pinned Asterisk source, compiles it, starts the PBX process, verifies PJSIP endpoints and dialplan, checks that the SQLite CDR backend records a generated answered Asterisk call, and verifies that record through the authenticated call-history API. This does not yet prove two-way audio between physical phones or call records from physical handsets.
+GitHub Actions runs Python renderer and API tests, Bash syntax/ShellCheck checks, builds the pinned AI3I/chan_sccp driver against Asterisk 22, and runs a Debian 13 integration job that starts Asterisk, verifies PJSIP endpoints and dialplan, confirms `chan_sccp.so` loads and exposes `sccp show devices`, checks the SQLite CDR backend records a generated answered call, and verifies that record through the authenticated call-history API. This does not yet prove two-way audio between physical phones or call records from physical handsets.
 

@@ -43,7 +43,7 @@ jobs:
             build-essential bison flex libtool-bin git wget curl ca-certificates pkg-config python3 openssl \
             libxml2-dev libncurses-dev uuid-dev libsqlite3-dev libssl-dev libedit-dev \
             libjansson-dev libcurl4-openssl-dev libnewt-dev libspandsp-dev libsrtp2-dev \
-            libspeexdsp-dev libopus-dev libogg-dev libvorbis-dev libasound2-dev python3-venv sudo
+            libspeexdsp-dev libopus-dev libogg-dev libvorbis-dev libasound2-dev libxslt1-dev gettext python3-venv sudo
       - name: Download and verify pinned Asterisk source
         shell: bash
         run: |
@@ -70,7 +70,20 @@ jobs:
         working-directory: /usr/src/tomos/asterisk-22.12.0
         run: |
           make install
+          make install-headers
           make samples
+      - name: Build pinned chan_sccp for Asterisk 22
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          SCCP_COMMIT=9591e4583c0c3b682d30d253ce77d596f040acf8
+          git clone --no-checkout https://github.com/AI3I/chan_sccp.git /usr/src/chan_sccp
+          git -C /usr/src/chan_sccp fetch --depth 1 origin "$SCCP_COMMIT"
+          git -C /usr/src/chan_sccp checkout --detach "$SCCP_COMMIT"
+          cd /usr/src/chan_sccp
+          ./configure --with-asterisk=/usr
+          make -j2
+          make install
       - name: Configure TomOS test extensions
         run: |
           groupadd --system asterisk || true
@@ -78,6 +91,7 @@ jobs:
           install -d -o asterisk -g asterisk -m 0750 /var/lib/asterisk /var/log/asterisk /var/spool/asterisk /run/asterisk
           install -m 0644 asterisk/asterisk.conf /etc/asterisk/asterisk.conf
           install -m 0644 asterisk/modules.conf /etc/asterisk/modules.conf
+          install -m 0640 asterisk/sccp.conf /etc/asterisk/sccp.conf
           install -m 0644 asterisk/logger.conf /etc/asterisk/logger.conf
           install -m 0644 asterisk/rtp.conf /etc/asterisk/rtp.conf
           install -m 0644 asterisk/cdr.conf /etc/asterisk/cdr.conf
@@ -164,6 +178,11 @@ jobs:
           printf '%s\n' "$ENDPOINTS"
           grep -Fq '100/100' <<<"$ENDPOINTS"
           grep -Fq '101/101' <<<"$ENDPOINTS"
+          SCCP_MODULES="$(asterisk -rx 'module show like chan_sccp.so')"
+          printf '%s\\n' "$SCCP_MODULES"
+          grep -Fq 'chan_sccp.so' <<<"$SCCP_MODULES"
+          SCCP_DEVICES="$(asterisk -rx 'sccp show devices')"
+          printf '%s\\n' "$SCCP_DEVICES"
           STATUS="$(/usr/local/sbin/tomos-sipserver-status)"
           grep -Fq '"status": "online"' <<<"$STATUS"
           grep -Fq '"registered_count": 0' <<<"$STATUS"
