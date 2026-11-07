@@ -25,6 +25,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, HTTPBasic
 from pydantic import BaseModel, ConfigDict, Field
 
 from .db import DEFAULT_DB, connect, initialize_database
+from .auth import hash_password, verify_password
 from .yealink import normalize_mac, normalize_model, render_yealink_cfg, validate_server_host
 from .grandstream import normalize_model as normalize_grandstream_model, render_grandstream_xml
 from .polycom import normalize_model as normalize_polycom_model, render_polycom_cfg
@@ -42,6 +43,22 @@ class DashboardLogin(BaseModel):
     username: str = Field(min_length=3, max_length=32, pattern=r"^[A-Za-z0-9_.-]+$")
     password: str = Field(min_length=1, max_length=256)
 
+
+
+class UserCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    username: str = Field(min_length=3, max_length=32, pattern=r"^[A-Za-z0-9_.-]+$")
+    password: str = Field(min_length=12, max_length=128)
+    role: str = Field(default="operator", pattern=r"^(admin|operator|viewer)$")
+
+class UserUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    role: str | None = Field(default=None, pattern=r"^(admin|operator|viewer)$")
+    enabled: bool | None = None
+
+class UserPasswordUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    password: str = Field(min_length=12, max_length=128)
 
 class ExtensionCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -227,6 +244,11 @@ def create_app(
     admin_user = admin_username if admin_username is not None else os.environ.get("TOMOS_ADMIN_USERNAME", "admin")
     if not re.fullmatch(r"[A-Za-z0-9_.-]{3,32}", admin_user):
         raise RuntimeError("TOMOS_ADMIN_USERNAME must be 3-32 letters, numbers, dots, underscores or hyphens")
+    with connect(db_path) as connection:
+        user_count = connection.execute("SELECT COUNT(*) FROM admin_users").fetchone()[0]
+        if user_count == 0:
+            now = _utc_now()
+            connection.execute("INSERT INTO admin_users(username, password_hash, role, enabled, created_at, updated_at) VALUES (?, ?, 'admin', 1, ?, ?)", (admin_user, hash_password(admin_secret), now, now))
     cookie_secure = os.environ.get("TOMOS_COOKIE_SECURE", "false").lower() in {"1", "true", "yes"}
     dashboard_dir = Path(static_dir or os.environ.get("TOMOS_DASHBOARD_DIR", "/opt/tomos-sipserver/app/dashboard"))
     mutation_lock = threading.RLock()
@@ -242,31 +264,44 @@ def create_app(
         redoc_url=None,
     )
 
-    def valid_session(request: Request, check_csrf: bool = False) -> bool:
+    def valid_session(request: Request, check_csrf: bool = False) -> dict | None:
         raw = request.cookies.get("tomos_session", "")
         try:
-            issued, csrf, signature = raw.split(".", 2)
-            signed = f"{issued}.{csrf}"
+            issued, user_id_text, csrf, signature = raw.split(".", 3)
+            signed = f"{issued}.{user_id_text}.{csrf}"
             expected = hmac.new(token.encode(), signed.encode(), hashlib.sha256).hexdigest()
             age = int(datetime.now(timezone.utc).timestamp()) - int(issued)
             if age < 0 or age > SESSION_MAX_AGE or not hmac.compare_digest(signature, expected):
-                return False
+                return None
             if check_csrf:
                 header = request.headers.get("x-tomos-csrf", "")
                 cookie = request.cookies.get("tomos_csrf", "")
                 if not header or not cookie or not hmac.compare_digest(header, csrf) or not hmac.compare_digest(cookie, csrf):
-                    return False
-            return True
+                    return None
+            with connect(db_path) as connection:
+                row = connection.execute("SELECT id, username, role, enabled FROM admin_users WHERE id = ?", (int(user_id_text),)).fetchone()
+            if row is None or not row["enabled"]:
+                return None
+            return {"id": row["id"], "username": row["username"], "role": row["role"]}
         except (ValueError, TypeError):
-            return False
+            return None
 
-    def require_token(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(security)) -> None:
+    def require_token(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(security)) -> dict:
         supplied = credentials.credentials if credentials and credentials.scheme.lower() == "bearer" else ""
         if supplied and hmac.compare_digest(supplied, token):
-            return
-        if valid_session(request, check_csrf=request.method not in {"GET", "HEAD", "OPTIONS"}):
-            return
-        raise HTTPException(status_code=401, detail="Login required or session expired", headers={"WWW-Authenticate": "Bearer"})
+            return {"id": None, "username": "api-token", "role": "admin"}
+        principal = valid_session(request, check_csrf=request.method not in {"GET", "HEAD", "OPTIONS"})
+        if principal is None:
+            raise HTTPException(status_code=401, detail="Login required or session expired", headers={"WWW-Authenticate": "Bearer"})
+        if principal["role"] == "viewer" and request.method not in {"GET", "HEAD", "OPTIONS"}:
+            raise HTTPException(status_code=403, detail="Read-only account")
+        return principal
+
+    def require_admin(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(security)) -> dict:
+        principal = require_token(request, credentials)
+        if principal["role"] != "admin":
+            raise HTTPException(status_code=403, detail="Administrator role required")
+        return principal
 
     def mutate(operation: Callable[[sqlite3.Connection], object]):
         with mutation_lock:
@@ -302,25 +337,25 @@ def create_app(
             if len(attempts) >= login_max_attempts:
                 retry_after = max(1, int(login_window_seconds - (now - attempts[0])))
                 login_attempts[client_ip] = attempts
-                raise HTTPException(status_code=429, detail="Too many login attempts. Try again later.",
-                                    headers={"Retry-After": str(retry_after)})
+                raise HTTPException(status_code=429, detail="Too many login attempts. Try again later.", headers={"Retry-After": str(retry_after)})
             login_attempts[client_ip] = attempts
-            if not (hmac.compare_digest(payload.username, admin_user) and hmac.compare_digest(payload.password, admin_secret)):
+            with connect(db_path) as connection:
+                row = connection.execute("SELECT id, username, password_hash, role, enabled FROM admin_users WHERE username = ? COLLATE NOCASE", (payload.username,)).fetchone()
+            if row is None or not row["enabled"] or not verify_password(payload.password, row["password_hash"]):
                 login_attempts[client_ip].append(now)
-                raise HTTPException(status_code=401, detail="Invalid password")
+                raise HTTPException(status_code=401, detail="Invalid username or password")
             login_attempts.pop(client_ip, None)
             if len(login_attempts) > 1024:
-                expired = [address for address, stamps in login_attempts.items()
-                           if not stamps or now - stamps[-1] >= login_window_seconds]
+                expired = [address for address, stamps in login_attempts.items() if not stamps or now - stamps[-1] >= login_window_seconds]
                 for address in expired:
                     login_attempts.pop(address, None)
         issued = str(int(datetime.now(timezone.utc).timestamp()))
         csrf = secrets.token_urlsafe(24)
-        signed = f"{issued}.{csrf}"
+        signed = f"{issued}.{row["id"]}.{csrf}"
         signature = hmac.new(token.encode(), signed.encode(), hashlib.sha256).hexdigest()
         response.set_cookie("tomos_session", f"{signed}.{signature}", max_age=SESSION_MAX_AGE, httponly=True, secure=cookie_secure, samesite="strict", path="/")
         response.set_cookie("tomos_csrf", csrf, max_age=SESSION_MAX_AGE, httponly=False, secure=cookie_secure, samesite="strict", path="/")
-        return {"authenticated": True, "expires_in": SESSION_MAX_AGE}
+        return {"authenticated": True, "expires_in": SESSION_MAX_AGE, "user": {"id": row["id"], "username": row["username"], "role": row["role"]}}
 
     @app.post("/api/v1/auth/logout", tags=["authentication"])
     def dashboard_logout(response: Response):
@@ -330,7 +365,8 @@ def create_app(
 
     @app.get("/api/v1/auth/session", tags=["authentication"])
     def dashboard_session(request: Request):
-        return {"authenticated": valid_session(request)}
+        principal = valid_session(request)
+        return {"authenticated": principal is not None, "user": principal}
 
     @app.get("/api/v1/dashboard/summary", dependencies=[Depends(require_token)], tags=["dashboard"])
     def dashboard_summary():
