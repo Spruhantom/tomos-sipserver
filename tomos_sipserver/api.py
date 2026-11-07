@@ -19,17 +19,19 @@ from pathlib import Path
 from typing import Callable
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, ConfigDict, Field
 
 from .db import DEFAULT_DB, connect, initialize_database
+from .yealink import normalize_mac, render_yealink_cfg, validate_server_host
 
 EXTENSION_PATTERN = r"^[1-9][0-9]{2,5}$"
 PASSWORD_PATTERN = r"^[A-Za-z0-9._~-]{24,128}$"
 SESSION_MAX_AGE = 28800
 security = HTTPBearer(auto_error=False)
+provisioning_security = HTTPBasic(auto_error=False)
 
 
 class DashboardLogin(BaseModel):
@@ -56,6 +58,15 @@ class ExtensionView(BaseModel):
     enabled: bool
     created_at: str
     updated_at: str
+
+class YealinkDeviceCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    extension: str = Field(pattern=EXTENSION_PATTERN)
+    mac: str = Field(min_length=12, max_length=17)
+    model: str = Field(default="SIP-T-series", min_length=2, max_length=32, pattern=r"^[A-Za-z0-9-]+$")
+    server_host: str = Field(min_length=1, max_length=253)
+
+
 
 
 def _utc_now() -> str:
@@ -381,6 +392,121 @@ def create_app(
                 raise HTTPException(status_code=409, detail="Extension already exists") from error
             return {"extension": payload.extension, "display_name": display_name, "enabled": True, "sip_password": password}
         return mutate(operation)
+
+
+    @app.post("/api/v1/devices/yealink", status_code=status.HTTP_201_CREATED,
+              dependencies=[Depends(require_token)], tags=["Yealink provisioning"])
+    def register_yealink_device(payload: YealinkDeviceCreate):
+        """Register a Yealink phone and issue its one-time provisioning credentials."""
+        try:
+            mac = normalize_mac(payload.mac)
+            host = validate_server_host(payload.server_host)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        model = payload.model.strip().upper()
+        username = "tomos-" + mac.lower()
+        password = secrets.token_urlsafe(32)
+        now = _utc_now()
+        with connect(db_path) as connection:
+            extension_row = connection.execute(
+                "SELECT enabled FROM extensions WHERE extension = ?", (payload.extension,)
+            ).fetchone()
+            if extension_row is None:
+                raise HTTPException(status_code=404, detail="Extension not found")
+            if not extension_row["enabled"]:
+                raise HTTPException(status_code=409, detail="Enable the SIP extension before provisioning a phone")
+            try:
+                connection.execute(
+                    """INSERT INTO yealink_devices
+                       (mac, extension, model, server_host, provisioning_password_hash, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (mac, payload.extension, model, host,
+                     hashlib.sha256(password.encode()).hexdigest(), now),
+                )
+            except sqlite3.IntegrityError as error:
+                raise HTTPException(status_code=409, detail="A Yealink device with this MAC address is already registered") from error
+        return {
+            "mac": mac, "extension": payload.extension, "model": model,
+            "provisioning_path": f"/provisioning/yealink/{mac}.cfg",
+            "provisioning_username": username,
+            "provisioning_password": password,
+            "authentication": "HTTP Basic (use HTTPS)",
+            "password_displayed_once": True,
+        }
+
+    @app.get("/api/v1/devices/yealink", dependencies=[Depends(require_token)],
+             tags=["Yealink provisioning"])
+    def list_yealink_devices():
+        with connect(db_path) as connection:
+            rows = connection.execute(
+                """SELECT d.mac, d.extension, d.model, d.server_host, d.created_at,
+                          e.display_name, e.enabled
+                   FROM yealink_devices d JOIN extensions e ON e.extension = d.extension
+                   ORDER BY d.mac"""
+            ).fetchall()
+        return [{
+            "mac": row["mac"], "extension": row["extension"],
+            "display_name": row["display_name"], "model": row["model"],
+            "server_host": row["server_host"], "enabled": bool(row["enabled"]),
+            "created_at": row["created_at"],
+        } for row in rows]
+
+    @app.delete("/api/v1/devices/yealink/{mac}", status_code=status.HTTP_204_NO_CONTENT,
+                dependencies=[Depends(require_token)], tags=["Yealink provisioning"])
+    def remove_yealink_device(mac: str):
+        try:
+            canonical_mac = normalize_mac(mac)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        with connect(db_path) as connection:
+            cursor = connection.execute("DELETE FROM yealink_devices WHERE mac = ?", (canonical_mac,))
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Yealink device not found")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.get("/provisioning/yealink/{mac}.cfg", tags=["Yealink provisioning"])
+    def yealink_configuration(
+        mac: str, request: Request,
+        credentials: HTTPBasicCredentials | None = Depends(provisioning_security),
+    ):
+        """Serve a per-MAC Yealink CFG only to the phone holding its one-time secret."""
+        if request.url.scheme != "https" and request.headers.get("x-forwarded-proto", "").lower() != "https":
+            raise HTTPException(status_code=400, detail="Yealink provisioning requires HTTPS")
+        try:
+            canonical_mac = normalize_mac(mac)
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail="Provisioning profile not found") from error
+        if credentials is None:
+            raise HTTPException(status_code=401, detail="Provisioning authentication required",
+                                headers={"WWW-Authenticate": "Basic"})
+        with connect(db_path) as connection:
+            row = connection.execute(
+                """SELECT d.extension, d.server_host, d.provisioning_password_hash,
+                          e.display_name, e.password, e.enabled
+                   FROM yealink_devices d JOIN extensions e ON e.extension = d.extension
+                   WHERE d.mac = ?""", (canonical_mac,)
+            ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Provisioning profile not found")
+        expected_user = "tomos-" + canonical_mac.lower()
+        supplied_hash = hashlib.sha256(credentials.password.encode()).hexdigest()
+        if (not secrets.compare_digest(credentials.username, expected_user)
+                or not secrets.compare_digest(supplied_hash, row["provisioning_password_hash"])):
+            raise HTTPException(status_code=401, detail="Invalid provisioning credentials",
+                                headers={"WWW-Authenticate": "Basic"})
+        if not row["enabled"]:
+            raise HTTPException(status_code=410, detail="The assigned SIP extension is disabled")
+        try:
+            config = render_yealink_cfg(
+                extension=row["extension"], display_name=row["display_name"],
+                sip_password=row["password"], server_host=row["server_host"],
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=500, detail="Unable to render device configuration") from error
+        return PlainTextResponse(config, media_type="text/plain",
+                                 headers={"Cache-Control": "no-store, private",
+                                          "Pragma": "no-cache",
+                                          "X-Content-Type-Options": "nosniff"})
 
     @app.get("/api/v1/extensions/{extension}/provisioning", dependencies=[Depends(require_token)], tags=["provisioning"])
     def extension_provisioning(extension: str):
