@@ -776,6 +776,7 @@ def create_app(
             "sccp_config_status": "generated",
             "tftp_profile_status": "generated",
             "hardware_test_status": "not_tested",
+            "compatibility": model_compatibility(model),
         }
 
     @app.get("/api/v1/devices/cisco", dependencies=[Depends(require_token)],
@@ -796,6 +797,7 @@ def create_app(
             "sccp_config_status": "generated" if row["enabled"] else "not_generated",
             "tftp_profile_status": "generated",
             "hardware_test_status": "not_tested",
+            "compatibility": model_compatibility(row["model"]),
         } for row in rows]
 
     @app.delete("/api/v1/devices/cisco/{mac}", status_code=status.HTTP_204_NO_CONTENT,
