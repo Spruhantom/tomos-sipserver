@@ -10,12 +10,14 @@ die() { printf '[TomOS SIP] ERROR: %s\n' "$*" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
-for required in scripts/render-config.py scripts/tomos-sipserver-check scripts/tomos-sipserver-apply-config tomos_sipserver/api.py tomos_sipserver/db.py dashboard/index.html dashboard/app.js dashboard/style.css requirements.txt systemd/asterisk.service systemd/tomos-sipserver.service systemd/tomos-sipserver-api.service sudoers/tomos-sipserver-api asterisk/asterisk.conf asterisk/modules.conf asterisk/logger.conf asterisk/rtp.conf asterisk/cdr.conf asterisk/cdr_sqlite3_custom.conf; do
+for required in scripts/render-config.py scripts/tomos-sipserver-check scripts/tomos-sipserver-apply-config tomos_sipserver/api.py tomos_sipserver/db.py dashboard/index.html dashboard/app.js dashboard/style.css requirements.txt systemd/asterisk.service systemd/tomos-sipserver.service systemd/tomos-sipserver-api.service sudoers/tomos-sipserver-api asterisk/asterisk.conf asterisk/modules.conf asterisk/logger.conf asterisk/rtp.conf asterisk/cdr.conf asterisk/cdr_sqlite3_custom.conf asterisk/sccp.conf; do
   [[ -f "$REPO_ROOT/$required" ]] || die "Missing project file: $required (use a complete repository checkout)."
 done
 
 export DEBIAN_FRONTEND=noninteractive
 ASTERISK_VERSION=22.12.0
+SCCP_COMMIT=9591e4583c0c3b682d30d253ce77d596f040acf8
+SCCP_SOURCE_DIR=/usr/local/src/tomos-chan-sccp
 SOURCE_URL="https://github.com/asterisk/asterisk/releases/download/${ASTERISK_VERSION}/asterisk-${ASTERISK_VERSION}.tar.gz"
 EXPECTED_SHA256=f8b2ba98aac6c4ff3376bc0a2868bea6ed577ca684efb7ec739ae6e8ce6e35e2
 BUILD_ROOT=/usr/local/src/tomos-asterisk
@@ -27,7 +29,7 @@ BUILD_JOBS="${TOMOS_BUILD_JOBS:-2}"
 log "Installing Asterisk and API dependencies."
 apt-get update
 apt-get install -y --no-install-recommends build-essential git wget curl ca-certificates pkg-config python3 python3-venv sudo openssl \
-  libxml2-dev libncurses-dev uuid-dev libsqlite3-dev libssl-dev libedit-dev libjansson-dev \
+  libxml2-dev libxslt1-dev gettext libncurses-dev uuid-dev libsqlite3-dev libssl-dev libedit-dev libjansson-dev \
   libcurl4-openssl-dev libnewt-dev libspandsp-dev libsrtp2-dev
 
 install -d -m 0755 "$BUILD_ROOT"
@@ -49,10 +51,23 @@ make menuselect.makeopts
 make -j"$BUILD_JOBS"
 make install
 
+log "Building pinned chan_sccp driver for Asterisk ${ASTERISK_VERSION}."
+if [[ ! -d "$SCCP_SOURCE_DIR/.git" ]]; then
+  git clone --no-checkout https://github.com/AI3I/chan_sccp.git "$SCCP_SOURCE_DIR"
+fi
+git -C "$SCCP_SOURCE_DIR" fetch --depth 1 origin "$SCCP_COMMIT"
+git -C "$SCCP_SOURCE_DIR" checkout --detach "$SCCP_COMMIT"
+cd "$SCCP_SOURCE_DIR"
+./configure
+make -j"$BUILD_JOBS"
+make install
+cd "$SOURCE_DIR"
+ldconfig
+
 install -d -m 0750 /etc/asterisk/tomos-backups
 BACKUP_DIR="/etc/asterisk/tomos-backups/$(date -u +%Y%m%dT%H%M%SZ)"
 install -d -m 0750 "$BACKUP_DIR"
-for name in asterisk.conf modules.conf logger.conf rtp.conf cdr.conf cdr_sqlite3_custom.conf pjsip.conf extensions.conf; do
+for name in asterisk.conf modules.conf logger.conf rtp.conf cdr.conf cdr_sqlite3_custom.conf pjsip.conf extensions.conf sccp.conf; do
   if [[ -f "/etc/asterisk/$name" ]]; then cp -a "/etc/asterisk/$name" "$BACKUP_DIR/$name"; fi
 done
 log "Existing Asterisk configuration backed up to $BACKUP_DIR."
@@ -118,13 +133,14 @@ install -D -m 0644 "$REPO_ROOT/systemd/tomos-sipserver-api.service" /etc/systemd
 
 install -m 0644 "$REPO_ROOT/asterisk/asterisk.conf" /etc/asterisk/asterisk.conf
 install -m 0644 "$REPO_ROOT/asterisk/modules.conf" /etc/asterisk/modules.conf
+install -m 0640 "$REPO_ROOT/asterisk/sccp.conf" /etc/asterisk/sccp.conf
 install -m 0644 "$REPO_ROOT/asterisk/logger.conf" /etc/asterisk/logger.conf
 install -m 0644 "$REPO_ROOT/asterisk/rtp.conf" /etc/asterisk/rtp.conf
 install -m 0644 "$REPO_ROOT/asterisk/cdr.conf" /etc/asterisk/cdr.conf
 install -m 0644 "$REPO_ROOT/asterisk/cdr_sqlite3_custom.conf" /etc/asterisk/cdr_sqlite3_custom.conf
 PYTHONPATH=/opt/tomos-sipserver/app /opt/tomos-sipserver/venv/bin/python -m tomos_sipserver.apply_config --no-reload
-chown root:asterisk /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
-chmod 0640 /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
+chown root:asterisk /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf /etc/asterisk/sccp.conf
+chmod 0640 /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf /etc/asterisk/sccp.conf
 chown -R asterisk:asterisk /var/lib/asterisk /var/log/asterisk /var/spool/asterisk
 chown asterisk:asterisk /run/asterisk
 
@@ -160,5 +176,5 @@ log "Initial SIP credentials saved to $CREDENTIAL_FILE (root-only)."
 log "API bearer token saved to /root/tomos-sip-api-token.txt (root-only)."
 log "Dashboard password saved to /root/tomos-sip-dashboard-password.txt (root-only); open http://127.0.0.1:8000/ on the server or use a trusted HTTPS reverse proxy."
 log "Extension API listens on 127.0.0.1:8000; use a trusted HTTPS reverse proxy for remote administration."
-log "SIP: UDP 5060; RTP: UDP 10000-20000. Restrict access to your trusted LAN/VPN."
+log "SIP: UDP 5060; SCCP: TCP 2000; RTP: UDP 10000-20000. Restrict access to your trusted LAN/VPN."
 log "No router port forwarding, public SIP exposure or SIP trunk has been configured."
