@@ -1,6 +1,6 @@
 import unittest
 
-from tomos_sipserver.yealink import normalize_mac, render_yealink_cfg, validate_server_host
+from tomos_sipserver.yealink import normalize_mac, normalize_model, render_yealink_cfg, validate_server_host
 
 
 class YealinkRendererTests(unittest.TestCase):
@@ -12,6 +12,12 @@ class YealinkRendererTests(unittest.TestCase):
         for value in ("001122", "00112233445Z", "00:11:22:33:44:55:66", "00:11:22:33:44"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 normalize_mac(value)
+
+    def test_model_allowlist_is_normalized_and_rejects_unknown_models(self):
+        self.assertEqual(normalize_model("sip-t46u"), "SIP-T46U")
+        self.assertEqual(normalize_model(" SIP-T53W "), "SIP-T53W")
+        with self.assertRaises(ValueError):
+            normalize_model("SIP-T46U-FAKE")
 
     def test_host_rejects_url_port_and_path(self):
         for value in ("https://pbx.example", "pbx.example:5060", "pbx.example/path", ""):
@@ -28,7 +34,10 @@ class YealinkRendererTests(unittest.TestCase):
         self.assertIn("account.1.user_name = 120", config)
         self.assertIn("account.1.password = random-secret", config)
         self.assertIn("account.1.sip_server.1.address = 192.168.1.10", config)
-        self.assertIn("account.1.transport_type = 0", config)
+        self.assertTrue(config.startswith("#!version:1.0.0.1\n"))
+        self.assertIn("account.1.sip_server.1.transport_type = 0", config)
+        self.assertIn("account.1.codec.1.payload_type = PCMU", config)
+        self.assertIn("account.1.codec.2.payload_type = PCMA", config)
         self.assertNotIn("static.auto_provision.server.url", config)
 
     def test_renderer_rejects_config_line_injection(self):
