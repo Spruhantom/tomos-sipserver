@@ -13,7 +13,7 @@ def normalize_model(value: str) -> str:
     """Return a canonical Cisco model number from a narrowly allowlisted input."""
     if not isinstance(value, str):
         raise ValueError("Unsupported Cisco SCCP model")
-    candidate = re.sub(r"^Cisco\\s+", "", value.strip(), flags=re.IGNORECASE)
+    candidate = re.sub(r"^Cisco\s+", "", value.strip(), flags=re.IGNORECASE)
     candidate = candidate.upper().replace(" ", "")
     if candidate not in SUPPORTED_MODELS:
         raise ValueError("Unsupported Cisco model; supported inventory models are 7940, 7960 and 7970")
