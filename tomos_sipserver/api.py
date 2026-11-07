@@ -222,8 +222,8 @@ def create_app(
     get_status = status_callback or _asterisk_status
     cdr_path = Path(cdr_database_path or os.environ.get("TOMOS_CDR_DB_PATH", "/var/lib/tomos-sipserver/cdr/cdr.db"))
     admin_secret = admin_password if admin_password is not None else os.environ.get("TOMOS_ADMIN_PASSWORD", "")
-    if len(admin_secret) < 24:
-        raise RuntimeError("TOMOS_ADMIN_PASSWORD must be configured with at least 24 characters")
+    if not re.fullmatch(r"[A-Za-z0-9._~-]{24,128}", admin_secret):
+        raise RuntimeError("TOMOS_ADMIN_PASSWORD must be 24-128 safe characters (letters, numbers, dot, underscore, tilde or hyphen)")
     admin_user = admin_username if admin_username is not None else os.environ.get("TOMOS_ADMIN_USERNAME", "admin")
     if not re.fullmatch(r"[A-Za-z0-9_.-]{3,32}", admin_user):
         raise RuntimeError("TOMOS_ADMIN_USERNAME must be 3-32 letters, numbers, dots, underscores or hyphens")
