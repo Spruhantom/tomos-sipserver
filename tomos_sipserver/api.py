@@ -25,7 +25,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, HTTPBasic
 from pydantic import BaseModel, ConfigDict, Field
 
 from .db import DEFAULT_DB, connect, initialize_database
-from .yealink import normalize_mac, render_yealink_cfg, validate_server_host
+from .yealink import normalize_mac, normalize_model, render_yealink_cfg, validate_server_host
 
 EXTENSION_PATTERN = r"^[1-9][0-9]{2,5}$"
 PASSWORD_PATTERN = r"^[A-Za-z0-9._~-]{24,128}$"
@@ -63,7 +63,7 @@ class YealinkDeviceCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     extension: str = Field(pattern=EXTENSION_PATTERN)
     mac: str = Field(min_length=12, max_length=17)
-    model: str = Field(default="SIP-T-series", min_length=2, max_length=32, pattern=r"^[A-Za-z0-9-]+$")
+    model: str = Field(default="SIP-T46U", min_length=2, max_length=32, pattern=r"^[A-Za-z0-9-]+$")
     server_host: str = Field(min_length=1, max_length=253)
 
 
@@ -403,7 +403,10 @@ def create_app(
             host = validate_server_host(payload.server_host)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
-        model = payload.model.strip().upper()
+        try:
+            model = normalize_model(payload.model)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         username = "tomos-" + mac.lower()
         password = secrets.token_urlsafe(32)
         now = _utc_now()
@@ -427,10 +430,33 @@ def create_app(
                 raise HTTPException(status_code=409, detail="A Yealink device with this MAC address is already registered") from error
         return {
             "mac": mac, "extension": payload.extension, "model": model,
-            "provisioning_path": f"/provisioning/yealink/{mac}.cfg",
+            "provisioning_path": f"/provisioning/yealink/{mac.lower()}.cfg",
             "provisioning_username": username,
             "provisioning_password": password,
             "authentication": "HTTP Basic (use HTTPS)",
+            "password_displayed_once": True,
+        }
+
+    @app.post("/api/v1/devices/yealink/{mac}/credentials",
+              dependencies=[Depends(require_token)], tags=["Yealink provisioning"])
+    def rotate_yealink_credentials(mac: str):
+        """Revoke the old device secret and issue a new one, displayed only once."""
+        try:
+            canonical_mac = normalize_mac(mac)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        password = secrets.token_urlsafe(32)
+        with connect(db_path) as connection:
+            cursor = connection.execute(
+                "UPDATE yealink_devices SET provisioning_password_hash = ?, created_at = ? WHERE mac = ?",
+                (hashlib.sha256(password.encode()).hexdigest(), _utc_now(), canonical_mac),
+            )
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Yealink device not found")
+        return {
+            "mac": canonical_mac,
+            "provisioning_username": "tomos-" + canonical_mac.lower(),
+            "provisioning_password": password,
             "password_displayed_once": True,
         }
 
