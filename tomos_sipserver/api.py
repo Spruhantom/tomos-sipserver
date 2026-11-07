@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import json
 import hmac
 import os
 import re
@@ -25,9 +26,11 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, HTTPBasic
 from pydantic import BaseModel, ConfigDict, Field
 
 from .db import DEFAULT_DB, connect, initialize_database
+from .auth import hash_password, verify_password
 from .yealink import normalize_mac, normalize_model, render_yealink_cfg, validate_server_host
 from .grandstream import normalize_model as normalize_grandstream_model, render_grandstream_xml
 from .polycom import normalize_model as normalize_polycom_model, render_polycom_cfg
+from .cisco import normalize_model as normalize_cisco_model
 
 EXTENSION_PATTERN = r"^[1-9][0-9]{2,5}$"
 PASSWORD_PATTERN = r"^[A-Za-z0-9._~-]{24,128}$"
@@ -38,8 +41,31 @@ provisioning_security = HTTPBasic(auto_error=False)
 
 class DashboardLogin(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    username: str = Field(min_length=3, max_length=32, pattern=r"^[A-Za-z0-9_.-]+$")
     password: str = Field(min_length=1, max_length=256)
 
+
+
+class UserCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    username: str = Field(min_length=3, max_length=32, pattern=r"^[A-Za-z0-9_.-]+$")
+    password: str = Field(min_length=12, max_length=128)
+    role: str = Field(default="operator", pattern=r"^(admin|operator|viewer)$")
+
+class UserUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    role: str | None = Field(default=None, pattern=r"^(admin|operator|viewer)$")
+    enabled: bool | None = None
+
+class PasswordChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    old_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=12, max_length=128)
+
+
+class UserPasswordUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    password: str = Field(min_length=12, max_length=128)
 
 class ExtensionCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -77,6 +103,14 @@ class GrandstreamDeviceCreate(BaseModel):
     server_host: str = Field(min_length=1, max_length=253)
 
 
+class CiscoDeviceCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    extension: str = Field(pattern=EXTENSION_PATTERN)
+    mac: str = Field(min_length=12, max_length=17)
+    model: str = Field(min_length=4, max_length=16, pattern=r"^[A-Za-z0-9 -]+$")
+    server_host: str = Field(min_length=1, max_length=253)
+
+
 class PolycomDeviceCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     extension: str = Field(pattern=EXTENSION_PATTERN)
@@ -91,6 +125,20 @@ class PolycomDeviceCreate(BaseModel):
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _record_audit(connection: sqlite3.Connection, actor: dict, action: str,
+                  target_user_id: int | None = None, target_username: str | None = None,
+                  details: dict | None = None) -> None:
+    """Append a password-free account audit event in the caller's transaction."""
+    connection.execute(
+        """INSERT INTO audit_events
+           (occurred_at, actor_user_id, actor_username, action, target_user_id,
+            target_username, details_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (_utc_now(), actor.get("id"), actor.get("username", "unknown"), action,
+         target_user_id, target_username, json.dumps(details or {}, sort_keys=True)),
+    )
 
 
 def _view(row: sqlite3.Row) -> dict:
@@ -198,6 +246,7 @@ def create_app(
     api_token: str | None = None,
     apply_callback: Callable[[], None] | None = None,
     admin_password: str | None = None,
+    admin_username: str | None = None,
     static_dir: str | Path | None = None,
     status_callback: Callable[[], dict] | None = None,
     cdr_database_path: str | Path | None = None,
@@ -211,8 +260,16 @@ def create_app(
     get_status = status_callback or _asterisk_status
     cdr_path = Path(cdr_database_path or os.environ.get("TOMOS_CDR_DB_PATH", "/var/lib/tomos-sipserver/cdr/cdr.db"))
     admin_secret = admin_password if admin_password is not None else os.environ.get("TOMOS_ADMIN_PASSWORD", "")
-    if len(admin_secret) < 24:
-        raise RuntimeError("TOMOS_ADMIN_PASSWORD must be configured with at least 24 characters")
+    if not re.fullmatch(r"[A-Za-z0-9._~-]{24,128}", admin_secret):
+        raise RuntimeError("TOMOS_ADMIN_PASSWORD must be 24-128 safe characters (letters, numbers, dot, underscore, tilde or hyphen)")
+    admin_user = admin_username if admin_username is not None else os.environ.get("TOMOS_ADMIN_USERNAME", "admin")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{3,32}", admin_user):
+        raise RuntimeError("TOMOS_ADMIN_USERNAME must be 3-32 letters, numbers, dots, underscores or hyphens")
+    with connect(db_path) as connection:
+        user_count = connection.execute("SELECT COUNT(*) FROM admin_users").fetchone()[0]
+        if user_count == 0:
+            now = _utc_now()
+            connection.execute("INSERT INTO admin_users(username, password_hash, role, enabled, created_at, updated_at) VALUES (?, ?, 'admin', 1, ?, ?)", (admin_user, hash_password(admin_secret), now, now))
     cookie_secure = os.environ.get("TOMOS_COOKIE_SECURE", "false").lower() in {"1", "true", "yes"}
     dashboard_dir = Path(static_dir or os.environ.get("TOMOS_DASHBOARD_DIR", "/opt/tomos-sipserver/app/dashboard"))
     mutation_lock = threading.RLock()
@@ -228,31 +285,44 @@ def create_app(
         redoc_url=None,
     )
 
-    def valid_session(request: Request, check_csrf: bool = False) -> bool:
+    def valid_session(request: Request, check_csrf: bool = False) -> dict | None:
         raw = request.cookies.get("tomos_session", "")
         try:
-            issued, csrf, signature = raw.split(".", 2)
-            signed = f"{issued}.{csrf}"
+            issued, user_id_text, csrf, signature = raw.split(".", 3)
+            signed = f"{issued}.{user_id_text}.{csrf}"
             expected = hmac.new(token.encode(), signed.encode(), hashlib.sha256).hexdigest()
             age = int(datetime.now(timezone.utc).timestamp()) - int(issued)
             if age < 0 or age > SESSION_MAX_AGE or not hmac.compare_digest(signature, expected):
-                return False
+                return None
             if check_csrf:
                 header = request.headers.get("x-tomos-csrf", "")
                 cookie = request.cookies.get("tomos_csrf", "")
                 if not header or not cookie or not hmac.compare_digest(header, csrf) or not hmac.compare_digest(cookie, csrf):
-                    return False
-            return True
+                    return None
+            with connect(db_path) as connection:
+                row = connection.execute("SELECT id, username, role, enabled FROM admin_users WHERE id = ?", (int(user_id_text),)).fetchone()
+            if row is None or not row["enabled"]:
+                return None
+            return {"id": row["id"], "username": row["username"], "role": row["role"]}
         except (ValueError, TypeError):
-            return False
+            return None
 
-    def require_token(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(security)) -> None:
+    def require_token(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(security)) -> dict:
         supplied = credentials.credentials if credentials and credentials.scheme.lower() == "bearer" else ""
         if supplied and hmac.compare_digest(supplied, token):
-            return
-        if valid_session(request, check_csrf=request.method not in {"GET", "HEAD", "OPTIONS"}):
-            return
-        raise HTTPException(status_code=401, detail="Login required or session expired", headers={"WWW-Authenticate": "Bearer"})
+            return {"id": None, "username": "api-token", "role": "admin"}
+        principal = valid_session(request, check_csrf=request.method not in {"GET", "HEAD", "OPTIONS"})
+        if principal is None:
+            raise HTTPException(status_code=401, detail="Login required or session expired", headers={"WWW-Authenticate": "Bearer"})
+        if principal["role"] == "viewer" and request.method not in {"GET", "HEAD", "OPTIONS"}:
+            raise HTTPException(status_code=403, detail="Read-only account")
+        return principal
+
+    def require_admin(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(security)) -> dict:
+        principal = require_token(request, credentials)
+        if principal["role"] != "admin":
+            raise HTTPException(status_code=403, detail="Administrator role required")
+        return principal
 
     def mutate(operation: Callable[[sqlite3.Connection], object]):
         with mutation_lock:
@@ -288,25 +358,25 @@ def create_app(
             if len(attempts) >= login_max_attempts:
                 retry_after = max(1, int(login_window_seconds - (now - attempts[0])))
                 login_attempts[client_ip] = attempts
-                raise HTTPException(status_code=429, detail="Too many login attempts. Try again later.",
-                                    headers={"Retry-After": str(retry_after)})
+                raise HTTPException(status_code=429, detail="Too many login attempts. Try again later.", headers={"Retry-After": str(retry_after)})
             login_attempts[client_ip] = attempts
-            if not hmac.compare_digest(payload.password, admin_secret):
+            with connect(db_path) as connection:
+                row = connection.execute("SELECT id, username, password_hash, role, enabled FROM admin_users WHERE username = ? COLLATE NOCASE", (payload.username,)).fetchone()
+            if row is None or not row["enabled"] or not verify_password(payload.password, row["password_hash"]):
                 login_attempts[client_ip].append(now)
-                raise HTTPException(status_code=401, detail="Invalid password")
+                raise HTTPException(status_code=401, detail="Invalid username or password")
             login_attempts.pop(client_ip, None)
             if len(login_attempts) > 1024:
-                expired = [address for address, stamps in login_attempts.items()
-                           if not stamps or now - stamps[-1] >= login_window_seconds]
+                expired = [address for address, stamps in login_attempts.items() if not stamps or now - stamps[-1] >= login_window_seconds]
                 for address in expired:
                     login_attempts.pop(address, None)
         issued = str(int(datetime.now(timezone.utc).timestamp()))
         csrf = secrets.token_urlsafe(24)
-        signed = f"{issued}.{csrf}"
+        signed = f"{issued}.{row[0]}.{csrf}"
         signature = hmac.new(token.encode(), signed.encode(), hashlib.sha256).hexdigest()
         response.set_cookie("tomos_session", f"{signed}.{signature}", max_age=SESSION_MAX_AGE, httponly=True, secure=cookie_secure, samesite="strict", path="/")
         response.set_cookie("tomos_csrf", csrf, max_age=SESSION_MAX_AGE, httponly=False, secure=cookie_secure, samesite="strict", path="/")
-        return {"authenticated": True, "expires_in": SESSION_MAX_AGE}
+        return {"authenticated": True, "expires_in": SESSION_MAX_AGE, "user": {"id": row["id"], "username": row["username"], "role": row["role"]}}
 
     @app.post("/api/v1/auth/logout", tags=["authentication"])
     def dashboard_logout(response: Response):
@@ -316,7 +386,115 @@ def create_app(
 
     @app.get("/api/v1/auth/session", tags=["authentication"])
     def dashboard_session(request: Request):
-        return {"authenticated": valid_session(request)}
+        principal = valid_session(request)
+        return {"authenticated": principal is not None, "user": principal}
+
+    @app.get("/api/v1/users", tags=["user management"])
+    def list_users(principal: dict = Depends(require_admin)):
+        with connect(db_path) as connection:
+            rows = connection.execute("SELECT id, username, role, enabled, created_at, updated_at FROM admin_users ORDER BY username COLLATE NOCASE").fetchall()
+        return [{"id": row["id"], "username": row["username"], "role": row["role"], "enabled": bool(row["enabled"]), "created_at": row["created_at"], "updated_at": row["updated_at"]} for row in rows]
+
+    @app.post("/api/v1/users", status_code=status.HTTP_201_CREATED, tags=["user management"])
+    def create_user(payload: UserCreate, principal: dict = Depends(require_admin)):
+        now = _utc_now()
+        try:
+            with connect(db_path) as connection:
+                cursor = connection.execute("INSERT INTO admin_users(username, password_hash, role, enabled, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)", (payload.username, hash_password(payload.password), payload.role, now, now))
+                user_id = cursor.lastrowid
+                _record_audit(connection, principal, "user.created", user_id, payload.username,
+                              {"role": payload.role, "enabled": True})
+        except sqlite3.IntegrityError as error:
+            raise HTTPException(status_code=409, detail="Username already exists") from error
+        return {"id": user_id, "username": payload.username, "role": payload.role, "enabled": True}
+
+    @app.patch("/api/v1/users/{user_id}", tags=["user management"])
+    def update_user(user_id: int, payload: UserUpdate, principal: dict = Depends(require_admin)):
+        changes = payload.model_dump(exclude_unset=True)
+        if not changes or any(value is None for value in changes.values()):
+            raise HTTPException(status_code=422, detail="Provide a non-null role or enabled value")
+        with connect(db_path) as connection:
+            target = connection.execute("SELECT id, username, role, enabled FROM admin_users WHERE id = ?", (user_id,)).fetchone()
+            if target is None:
+                raise HTTPException(status_code=404, detail="User not found")
+            next_role = changes.get("role", target["role"])
+            next_enabled = changes.get("enabled", bool(target["enabled"]))
+            if target["role"] == "admin" and target["enabled"] and (next_role != "admin" or not next_enabled):
+                remaining = connection.execute("SELECT COUNT(*) FROM admin_users WHERE role = ? AND enabled = 1 AND id != ?", ("admin", user_id)).fetchone()[0]
+                if remaining == 0:
+                    raise HTTPException(status_code=409, detail="Cannot disable or demote the last active administrator")
+            connection.execute("UPDATE admin_users SET role = ?, enabled = ?, updated_at = ? WHERE id = ?", (next_role, int(next_enabled), _utc_now(), user_id))
+            if next_role != target["role"]:
+                _record_audit(connection, principal, "user.role_changed", user_id, target["username"],
+                              {"from": target["role"], "to": next_role})
+            if bool(next_enabled) != bool(target["enabled"]):
+                _record_audit(connection, principal, "user.enabled" if next_enabled else "user.disabled",
+                              user_id, target["username"],
+                              {"from": bool(target["enabled"]), "to": bool(next_enabled)})
+            row = connection.execute("SELECT id, username, role, enabled FROM admin_users WHERE id = ?", (user_id,)).fetchone()
+        return {"id": row["id"], "username": row["username"], "role": row["role"], "enabled": bool(row["enabled"])}
+
+    @app.delete("/api/v1/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["user management"])
+    def delete_user(user_id: int, principal: dict = Depends(require_admin)):
+        if principal["id"] == user_id:
+            raise HTTPException(status_code=409, detail="You cannot delete your own account")
+        with connect(db_path) as connection:
+            target = connection.execute("SELECT id, username, role, enabled FROM admin_users WHERE id = ?", (user_id,)).fetchone()
+            if target is None:
+                raise HTTPException(status_code=404, detail="User not found")
+            if target["role"] == "admin" and target["enabled"]:
+                remaining = connection.execute("SELECT COUNT(*) FROM admin_users WHERE role = ? AND enabled = 1 AND id != ?", ("admin", user_id)).fetchone()[0]
+                if remaining == 0:
+                    raise HTTPException(status_code=409, detail="Cannot delete the last active administrator")
+            _record_audit(connection, principal, "user.deleted", user_id, target["username"],
+                          {"role": target["role"], "enabled": bool(target["enabled"])})
+            connection.execute("DELETE FROM admin_users WHERE id = ?", (user_id,))
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.post("/api/v1/users/{user_id}/password", tags=["user management"])
+    def reset_user_password(user_id: int, payload: UserPasswordUpdate, principal: dict = Depends(require_admin)):
+        with connect(db_path) as connection:
+            target = connection.execute("SELECT username FROM admin_users WHERE id = ?", (user_id,)).fetchone()
+            if target is None:
+                raise HTTPException(status_code=404, detail="User not found")
+            connection.execute("UPDATE admin_users SET password_hash = ?, updated_at = ? WHERE id = ?", (hash_password(payload.password), _utc_now(), user_id))
+            _record_audit(connection, principal, "user.password_reset", user_id, target["username"])
+        return {"id": user_id, "password_updated": True}
+
+    @app.post("/api/v1/auth/password", tags=["authentication"])
+    def change_own_password(payload: PasswordChange, principal: dict = Depends(require_token)):
+        if principal["id"] is None:
+            raise HTTPException(status_code=403, detail="API-token authentication cannot change a dashboard password")
+        with connect(db_path) as connection:
+            row = connection.execute("SELECT password_hash FROM admin_users WHERE id = ?", (principal["id"],)).fetchone()
+            if row is None or not verify_password(payload.old_password, row["password_hash"]):
+                raise HTTPException(status_code=400, detail="Current password is incorrect")
+            connection.execute("UPDATE admin_users SET password_hash = ?, updated_at = ? WHERE id = ?", (hash_password(payload.new_password), _utc_now(), principal["id"]))
+            _record_audit(connection, principal, "user.password_changed", principal["id"], principal["username"])
+        return {"password_updated": True}
+
+    @app.get("/api/v1/audit", tags=["audit log"])
+    def list_audit_events(
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0, le=1000000),
+        action: str | None = Query(default=None, min_length=3, max_length=64, pattern=r"^[a-z_.]+$"),
+        principal: dict = Depends(require_admin),
+    ):
+        """Return newest account audit events; restricted to administrators."""
+        where = " WHERE action = ?" if action else ""
+        values = [action] if action else []
+        with connect(db_path) as connection:
+            total = connection.execute("SELECT COUNT(*) FROM audit_events" + where, values).fetchone()[0]
+            rows = connection.execute(
+                "SELECT id, occurred_at, actor_user_id, actor_username, action, target_user_id, target_username, details_json FROM audit_events" +
+                where + " ORDER BY id DESC LIMIT ? OFFSET ?", [*values, limit, offset]
+            ).fetchall()
+        return {"events": [{
+            "id": row["id"], "occurred_at": row["occurred_at"],
+            "actor_user_id": row["actor_user_id"], "actor_username": row["actor_username"],
+            "action": row["action"], "target_user_id": row["target_user_id"],
+            "target_username": row["target_username"], "details": json.loads(row["details_json"]),
+        } for row in rows], "total": total, "limit": limit, "offset": offset}
 
     @app.get("/api/v1/dashboard/summary", dependencies=[Depends(require_token)], tags=["dashboard"])
     def dashboard_summary():
@@ -552,6 +730,72 @@ def create_app(
             return {"extension": payload.extension, "display_name": display_name, "enabled": True, "sip_password": password}
         return mutate(operation)
 
+
+    @app.post("/api/v1/devices/cisco", status_code=status.HTTP_201_CREATED,
+              dependencies=[Depends(require_token)], tags=["Cisco SCCP provisioning"])
+    def register_cisco_device(payload: CiscoDeviceCreate):
+        """Add a Cisco SCCP handset to inventory; this does not provision or activate it."""
+        try:
+            mac = normalize_mac(payload.mac)
+            host = validate_server_host(payload.server_host)
+            model = normalize_cisco_model(payload.model)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        now = _utc_now()
+        with connect(db_path) as connection:
+            extension_row = connection.execute(
+                "SELECT enabled FROM extensions WHERE extension = ?", (payload.extension,)
+            ).fetchone()
+            if extension_row is None:
+                raise HTTPException(status_code=404, detail="Extension not found")
+            if not extension_row["enabled"]:
+                raise HTTPException(status_code=409, detail="Enable the SIP extension before assigning a Cisco phone")
+            try:
+                connection.execute(
+                    """INSERT INTO cisco_devices (mac, extension, model, server_host, created_at)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (mac, payload.extension, model, host, now),
+                )
+            except sqlite3.IntegrityError as error:
+                raise HTTPException(status_code=409, detail="A Cisco device with this MAC address is already registered") from error
+        return {
+            "mac": mac, "extension": payload.extension, "model": model,
+            "server_host": host, "inventory_status": "registered",
+            "provisioning_status": "not_configured",
+            "hardware_test_status": "not_tested",
+        }
+
+    @app.get("/api/v1/devices/cisco", dependencies=[Depends(require_token)],
+             tags=["Cisco SCCP provisioning"])
+    def list_cisco_devices():
+        with connect(db_path) as connection:
+            rows = connection.execute(
+                """SELECT d.mac, d.extension, d.model, d.server_host, d.created_at,
+                          e.display_name, e.enabled
+                   FROM cisco_devices d JOIN extensions e ON e.extension = d.extension
+                   ORDER BY d.mac"""
+            ).fetchall()
+        return [{
+            "mac": row["mac"], "extension": row["extension"],
+            "display_name": row["display_name"], "model": row["model"],
+            "server_host": row["server_host"], "enabled": bool(row["enabled"]),
+            "created_at": row["created_at"],
+            "provisioning_status": "not_configured",
+            "hardware_test_status": "not_tested",
+        } for row in rows]
+
+    @app.delete("/api/v1/devices/cisco/{mac}", status_code=status.HTTP_204_NO_CONTENT,
+                dependencies=[Depends(require_token)], tags=["Cisco SCCP provisioning"])
+    def remove_cisco_device(mac: str):
+        try:
+            canonical_mac = normalize_mac(mac)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        with connect(db_path) as connection:
+            cursor = connection.execute("DELETE FROM cisco_devices WHERE mac = ?", (canonical_mac,))
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Cisco device not found")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post("/api/v1/devices/yealink", status_code=status.HTTP_201_CREATED,
               dependencies=[Depends(require_token)], tags=["Yealink provisioning"])

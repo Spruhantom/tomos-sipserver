@@ -4,7 +4,7 @@ A self-hosted home telephone system for Debian 13, built around Asterisk with a 
 
 ## Current status
 
-The Debian 13 Asterisk foundation passes CI; CI now also builds and integration-checks the initial Cisco SCCP driver. The installer builds Asterisk 22 LTS and the pinned AI3I/chan_sccp driver, while retaining PJSIP for ordinary SIP phones. The repository includes an authenticated FastAPI extension-management API, SQLite persistence, a privileged configuration-apply helper and systemd units. The dashboard provides extension management, live registration status, call history and Yealink, Grandstream and Polycom provisioning workflows. SCCP is currently at driver-foundation stage: the module is loaded and its CLI is checked, but Cisco device registration, model-specific SEP XML generation and TFTP delivery are the next implementation stage. Physical Cisco handset and firmware compatibility remain unverified. Asterisk writes call-detail records to a separate local SQLite database; call audio is not recorded.
+The Debian 13 Asterisk foundation passes CI; CI now also builds and integration-checks the initial Cisco SCCP driver. The installer builds Asterisk 22 LTS and the pinned AI3I/chan_sccp driver, while retaining PJSIP for ordinary SIP phones. The repository includes an authenticated FastAPI extension-management API, SQLite persistence, a privileged configuration-apply helper and systemd units. The dashboard provides extension management, live registration status, call history and Yealink, Grandstream and Polycom provisioning workflows. SCCP is currently at driver-foundation stage: the module is loaded and its CLI is checked, but Cisco handset inventory is now being added for the initial 7940, 7960 and 7970 target models; model-specific SEP XML generation and controlled TFTP delivery remain subsequent stages. Physical Cisco handset and firmware compatibility remain unverified. Asterisk writes call-detail records to a separate local SQLite database; call audio is not recorded.
 
 ## Install (Debian 13 only)
 
@@ -35,7 +35,7 @@ It then:
 - Installs FastAPI and initializes the SQLite extension database at `/var/lib/tomos-sipserver/extensions.db` (mode 0600).
 - Enables Asterisk CDR with the `cdr_sqlite3_custom` backend and stores call metadata in `/var/lib/tomos-sipserver/cdr/cdr.db`; no audio is recorded.
 - Preserves existing extension 100/101 credentials when the installer is rerun.
-- Generates an API bearer token in `/root/tomos-sip-api-token.txt` and a separate dashboard password in `/root/tomos-sip-dashboard-password.txt` (both mode 0600).
+- Generates an API bearer token in `/root/tomos-sip-api-token.txt` and stores the dashboard administrator username and password in `/root/tomos-sip-dashboard-username.txt` and `/root/tomos-sip-dashboard-password.txt` (mode 0600). On an interactive first install, the installer prompts for both dashboard credentials; passwords are hidden while typed and must be at least 24 characters. On upgrades, existing credentials are preserved when the password prompt is left blank. In non-interactive installs, a strong random password is generated.
 - Serves the dashboard and API on `127.0.0.1:8000`; it is not exposed directly to the LAN.
 - Installs a narrowly-scoped sudo helper for validated PJSIP configuration generation and reload.
 - Loads `chan_sccp.so`, disables the conflicting built-in `chan_skinny.so`, and installs the initial SCCP listener configuration in `/etc/asterisk/sccp.conf`.
@@ -47,14 +47,24 @@ The PBX listens on UDP 5060 for SIP, TCP 2000 for SCCP, and UDP 10000-20000 for 
 
 ## Extension management API
 
-The dashboard is served at `http://127.0.0.1:8000/`. Sign in using the one-time generated password in `/root/tomos-sip-dashboard-password.txt`. The dashboard uses short-lived HttpOnly, SameSite=Strict session cookies plus a CSRF header for mutations; the browser never receives the API bearer token. The API remains localhost-only; never expose port 8000 directly to an untrusted network. For remote access, place it behind a trusted HTTPS reverse proxy and enable `TOMOS_COOKIE_SECURE=true` in `/etc/tomos-sipserver/api.env` before restarting the API.
+The dashboard is served at `http://127.0.0.1:8000/`. Sign in using the administrator username and password shown in `/root/tomos-sip-dashboard-username.txt` and `/root/tomos-sip-dashboard-password.txt`. The dashboard uses short-lived HttpOnly, SameSite=Strict session cookies plus a CSRF header for mutations; the browser never receives the API bearer token. Dashboard accounts are stored in SQLite using PBKDF2-HMAC-SHA256 password hashes. The dashboard includes an administrator-only account management panel for creating accounts, changing roles, enabling/disabling users, deleting accounts and resetting passwords. The API also keeps an append-only account audit trail, available to administrators at `GET /api/v1/audit`. All signed-in roles can change their own password; viewer accounts are shown a read-only interface. The installer credentials bootstrap the first administrator only; subsequent logins use the account database. Roles are `admin` (full access), `operator` (PBX and device operations) and `viewer` (read-only). The API remains localhost-only; never expose port 8000 directly to an untrusted network. For remote access, place it behind a trusted HTTPS reverse proxy and enable `TOMOS_COOKIE_SECURE=true` in `/etc/tomos-sipserver/api.env` before restarting the API.
 
+- `GET /api/v1/users` — list dashboard accounts (administrators only; password hashes are never returned).
+- `POST /api/v1/users` — create an `admin`, `operator` or `viewer` account with a password of at least 12 characters.
+- `PATCH /api/v1/users/{id}` — change a user's role or enable/disable the account. The last active administrator cannot be demoted or disabled.
+- `DELETE /api/v1/users/{id}` — delete an account. The last active administrator and the currently signed-in account are protected.
+- `POST /api/v1/users/{id}/password` — reset a user's password (administrators only).
+- `POST /api/v1/auth/password` — change the signed-in user's password after verifying the current password.
+- `GET /api/v1/audit?limit=50&offset=0` — list newest account audit events (admins only), with an optional exact `action` filter. Records account creation, role changes, enable/disable, deletion, administrator password resets and self-service password changes. Passwords and password hashes are never written to audit events.
 - `GET /api/v1/extensions` — list extensions without exposing SIP passwords.
 - `POST /api/v1/extensions` — create an extension; a generated SIP password is returned once. Body: `{"extension":"120","display_name":"Office"}`.
 - `PATCH /api/v1/extensions/{extension}` — update `display_name` or `enabled`.
 - `POST /api/v1/extensions/{extension}/password` — rotate the SIP password and return it once.
 - `POST /api/v1/extensions/{extension}/enable` and `/disable` — enable or disable registration.
 - `DELETE /api/v1/extensions/{extension}` — delete an extension.
+- `POST /api/v1/devices/cisco` — add a Cisco SCCP handset to inventory. Initial model allowlist: 7940, 7960 and 7970. Body: `{"extension":"100","mac":"001122AABBCC","model":"7940","server_host":"192.168.1.10"}`. This records an assignment only; it does not yet generate SEP XML, publish TFTP files, or prove handset compatibility.
+- `GET /api/v1/devices/cisco` — list Cisco handset inventory, including explicit `not_configured` provisioning and `not_tested` hardware states.
+- `DELETE /api/v1/devices/cisco/{mac}` — remove a Cisco handset from inventory.
 - `POST /api/v1/devices/yealink` — register a Yealink phone against an enabled extension. Supply `extension`, `mac`, `model` and `server_host`. The response displays a unique HTTP Basic provisioning password once.
 - `GET /api/v1/devices/yealink` — list registered Yealink devices without provisioning secrets.
 - `POST /api/v1/devices/yealink/{mac}/credentials` — rotate a device's provisioning password and immediately revoke its previous password. The replacement is returned once.
@@ -103,7 +113,7 @@ Each mutation regenerates PJSIP and dialplan configuration and requests an Aster
 
 1. **Foundation (passed CI):** Debian 13 source-build installer, Asterisk, PJSIP, internal extensions, systemd and CI.
 2. **Extension API (current):** authenticated FastAPI CRUD, SQLite persistence, password rotation, enable/disable and configuration rollback.
-3. **Dashboard (initial release):** password login, session/CSRF protection, extension listing, create, enable/disable, delete and one-time password reset display. Device registration, generic SIP setup notes and searchable call history, date/number/result filters and CSV export are now included.
+3. **Dashboard (initial release):** password login, session/CSRF protection, extension listing, create, enable/disable, delete and one-time password reset display. Multi-user backend now supports administrator, operator and read-only roles, PBKDF2 password hashes, account enable/disable, password resets and last-admin safeguards; dashboard account-management screens remain to be added. Device registration, generic SIP setup notes and searchable call history, date/number/result filters and CSV export are now included.
 4. **Vendor provisioning (in progress):** Yealink, Grandstream and Polycom MAC-specific provisioning workflows are implemented with per-device credentials. Cisco SCCP driver foundation is now included; next: device registry, chan_sccp configuration generation, model-specific `SEP<MAC>.cnf.xml` files and TFTP delivery. Physical handset and firmware validation remains outstanding.
 5. Browser phone: SIP.js, WSS, SRTP and persistent in-dashboard call controls.
 6. Home features: voicemail, call history, groups, forwarding, DND, backups and restore.

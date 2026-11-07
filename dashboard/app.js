@@ -1,5 +1,7 @@
 const $=s=>document.querySelector(s);
 let csrf='';
+let currentUser=null;
+let resetUserId=null;
 let callFilters={};
 let callOffset=0;
 const callPageSize=50;
@@ -11,8 +13,8 @@ const api=async(path,opt={})=>{
   if(!r.ok){let d={};try{d=await r.json()}catch{}throw Error(d.detail||'Request failed')}
   return r.status===204?null:r.json()
 };
-function showLogin(){$('#login').hidden=false;$('#app').hidden=true;$('#logout').hidden=true}
-function showApp(){$('#login').hidden=true;$('#app').hidden=false;$('#logout').hidden=false}
+function showLogin(){$('#login').hidden=false;$('#app').hidden=true;$('#logout').hidden=true;$('#change-password').hidden=true;$('#current-user').textContent='';currentUser=null}
+function showApp(){$('#login').hidden=true;$('#app').hidden=false;$('#logout').hidden=false;$('#change-password').hidden=false;$('#current-user').textContent=currentUser?currentUser.username+' · '+currentUser.role:'';$('#app').classList.toggle('role-viewer',currentUser?.role==='viewer');$('#app').classList.toggle('role-operator',currentUser?.role==='operator');$('#user-management').hidden=currentUser?.role!=='admin';}
 function note(s){const n=$('#notice');n.textContent=s;n.style.display='block';setTimeout(()=>n.style.display='none',3200)}
 function cookie(n){return document.cookie.split('; ').find(x=>x.startsWith(n+'='))?.split('=').slice(1).join('=')||''}
 function secret(s){$('#secret-value').textContent=s;$('#secret-dialog').showModal()}
@@ -36,6 +38,7 @@ async function loadCalls(){
 }
 async function refresh(){
   const [sum,rows,status,yealinkDevices,grandstreamDevices,polycomDevices]=await Promise.all([api('/dashboard/summary'),api('/extensions'),api('/dashboard/status'),api('/devices/yealink'),api('/devices/grandstream'),api('/devices/polycom')]);
+  if(currentUser?.role==='admin')await loadUsers();
   $('#api-value').textContent='Online';
   $('#asterisk-value').textContent=status.status==='online'?'Online':'Offline';
   $('#uptime-value').textContent=status.uptime||'Uptime not available';
@@ -310,8 +313,43 @@ $('#export-calls').onclick=async()=>{
     a.href=url;a.download='tomos-call-history.csv';document.body.append(a);a.click();a.remove();URL.revokeObjectURL(url)
   }catch(err){note(err.message)}
 };
-$('#login-form').onsubmit=async e=>{e.preventDefault();try{await api('/auth/login',{method:'POST',body:JSON.stringify({password:$('#password').value})});csrf=cookie('tomos_csrf');showApp();await refresh()}catch(err){$('#login-error').textContent=err.message}};
-$('#logout').onclick=async()=>{try{await api('/auth/logout',{method:'POST'})}finally{csrf='';showLogin()}};
+$('#login-form').onsubmit=async e=>{e.preventDefault();try{const result=await api('/auth/login',{method:'POST',body:JSON.stringify({username:$('#username').value,password:$('#password').value})});currentUser=result.user;csrf=cookie('tomos_csrf');showApp();await refresh()}catch(err){$('#login-error').textContent=err.message}};
+$('#logout').onclick=async()=>{try{await api('/auth/logout',{method:'POST'})}finally{csrf='';currentUser=null;$('#change-password').hidden=true;$('#current-user').textContent='';showLogin()}};
+$('#change-password').onclick=()=>$('#own-password-dialog').showModal();
+$('#own-password-form').onsubmit=async e=>{e.preventDefault();try{await api('/auth/password',{method:'POST',body:JSON.stringify({old_password:$('#own-old-password').value,new_password:$('#own-new-password').value})});$('#own-password-dialog').close();$('#own-password-form').reset();note('Your password has been changed')}catch(err){note(err.message)}};
+async function loadUsers(){
+  const users=await api('/users');
+  const body=$('#users');body.replaceChildren();$('#users-empty').hidden=users.length>0;
+  for(const user of users){
+    const row=document.createElement("tr");
+    for(const value of [user.username,user.role]){const cell=document.createElement("td");cell.textContent=value;row.append(cell)}
+    const status=document.createElement("td"),pill=document.createElement("span");pill.className="pill "+(user.enabled?"":"off");pill.textContent=user.enabled?"Enabled":"Disabled";status.append(pill);row.append(status);
+    const actions=document.createElement("td");
+    const role=document.createElement("select");role.setAttribute("aria-label","Role for "+user.username);
+    for(const [value,label] of [["admin","Administrator"],["operator","Operator"],["viewer","Read-only viewer"]]){const option=document.createElement("option");option.value=value;option.textContent=label;role.append(option)}
+    role.value=user.role;role.onchange=async()=>{try{await api("/users/"+user.id,{method:"PATCH",body:JSON.stringify({role:role.value})});await loadUsers();note("Account role updated")}catch(error){note(error.message);role.value=user.role}};
+    const toggle=document.createElement("button");toggle.textContent=user.enabled?"Disable":"Enable";toggle.onclick=async()=>{if(user.id===currentUser.id&&user.enabled){note("You cannot disable your own account");return}if(!confirm((user.enabled?"Disable ":"Enable ")+user.username+"?"))return;try{await api("/users/"+user.id,{method:"PATCH",body:JSON.stringify({enabled:!user.enabled})});await loadUsers();note("Account status updated")}catch(error){note(error.message)}};
+    const reset=document.createElement("button");reset.textContent="Reset password";reset.onclick=()=>{resetUserId=user.id;$("#user-password-label").textContent="Set a new password for "+user.username+".";$("#user-reset-password").value="";$("#user-password-dialog").showModal()};
+    const remove=document.createElement("button");remove.textContent="Delete";remove.disabled=user.id===currentUser.id;remove.onclick=async()=>{if(!confirm("Permanently delete account "+user.username+"?"))return;try{await api("/users/"+user.id,{method:"DELETE"});await loadUsers();note("Account deleted")}catch(error){note(error.message)}};
+    actions.append(role,toggle,reset,remove);row.append(actions);body.append(row);
+  }
+  await loadAudit();
+}
+async function loadAudit(){
+  const result=await api('/audit?limit=30');
+  const body=$('#audit-events');body.replaceChildren();
+  $('#audit-empty').hidden=result.events.length>0;
+  for(const event of result.events){
+    const row=document.createElement('tr');
+    const values=[new Date(event.occurred_at).toISOString().replace('T',' ').replace('Z',' UTC'),event.actor_username,event.action,event.target_username||'—',JSON.stringify(event.details)];
+    for(const value of values){const cell=document.createElement('td');cell.textContent=value;row.append(cell)}
+    body.append(row);
+  }
+}
+$('#audit-refresh').onclick=()=>loadAudit().catch(error=>note(error.message));
+$("#user-create-form").onsubmit=async event=>{event.preventDefault();const button=$("#user-create-form button");button.disabled=true;try{const result=await api("/users",{method:"POST",body:JSON.stringify({username:$("#new-username").value.trim(),password:$("#new-user-password").value,role:$("#new-user-role").value})});$("#user-create-form").reset();await loadUsers();note("Created "+result.role+" account "+result.username)}catch(error){note(error.message)}finally{button.disabled=false}};
+$("#user-password-form").onsubmit=async event=>{event.preventDefault();if(!resetUserId)return;const button=$("#user-password-form button.primary");button.disabled=true;try{await api("/users/"+resetUserId+"/password",{method:"POST",body:JSON.stringify({password:$("#user-reset-password").value})});$("#user-password-dialog").close();$("#user-password-form").reset();note("Account password reset")}catch(error){note(error.message)}finally{button.disabled=false}};
+
 $('#new-extension').onclick=()=>$('#create-dialog').showModal();
 $('#create-form').onsubmit=async e=>{
   e.preventDefault();
@@ -320,5 +358,5 @@ $('#create-form').onsubmit=async e=>{
 };
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>b.closest('dialog').close());
 $('#copy-secret').onclick=async()=>{await navigator.clipboard.writeText($('#secret-value').textContent);note('Password copied')};
-(async()=>{const r=await fetch('/api/v1/auth/session'),d=await r.json();if(d.authenticated){csrf=cookie('tomos_csrf');showApp();try{await refresh()}catch(e){note(e.message)}}else showLogin()})();
+(async()=>{const r=await fetch('/api/v1/auth/session'),d=await r.json();if(d.authenticated){currentUser=d.user;csrf=cookie('tomos_csrf');showApp();try{await refresh()}catch(e){note(e.message)}}else showLogin()})();
 setInterval(()=>{if(!$('#app').hidden)refresh().catch(e=>note(e.message))},15000);
