@@ -45,6 +45,17 @@ def initialize_database(path: str | Path = DEFAULT_DB) -> None:
             )
         """)
         connection.execute("CREATE INDEX IF NOT EXISTS extensions_enabled_idx ON extensions(enabled)")
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS yealink_devices (
+                mac TEXT PRIMARY KEY,
+                extension TEXT NOT NULL REFERENCES extensions(extension) ON DELETE CASCADE,
+                model TEXT NOT NULL,
+                server_host TEXT NOT NULL,
+                provisioning_password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        connection.execute("CREATE INDEX IF NOT EXISTS yealink_devices_extension_idx ON yealink_devices(extension)")
     if db_path.exists():
         os.chmod(db_path, 0o600)
 
