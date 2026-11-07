@@ -54,6 +54,13 @@ class InstallerCredentialUpgradeTests(unittest.TestCase):
         with connect(self.database) as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM admin_users").fetchone()[0], 1)
 
+    def test_empty_database_is_left_for_first_admin_bootstrap(self):
+        empty_database = Path(self.tmp.name) / "empty.db"
+        initialize_database(empty_database)
+        update_bootstrap_admin_credentials(empty_database, "admin", "new-admin")
+        with connect(empty_database) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM admin_users").fetchone()[0], 0)
+
     def test_duplicate_username_rolls_back(self):
         now = datetime.now(timezone.utc).isoformat()
         with connect(self.database) as connection:
