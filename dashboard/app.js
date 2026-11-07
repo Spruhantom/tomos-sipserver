@@ -35,7 +35,7 @@ async function loadCalls(){
   }
 }
 async function refresh(){
-  const [sum,rows,status]=await Promise.all([api('/dashboard/summary'),api('/extensions'),api('/dashboard/status')]);
+  const [sum,rows,status,yealinkDevices]=await Promise.all([api('/dashboard/summary'),api('/extensions'),api('/dashboard/status'),api('/devices/yealink')]);
   $('#api-value').textContent='Online';
   $('#asterisk-value').textContent=status.status==='online'?'Online':'Offline';
   $('#uptime-value').textContent=status.uptime||'Uptime not available';
@@ -51,6 +51,34 @@ async function refresh(){
   $('#enabled-value').textContent=sum.extensions_enabled;
   $('#api-status').textContent='API online';
   await loadCalls();
+  $('#yealink-devices').replaceChildren();
+  $('#yealink-empty').hidden=yealinkDevices.length>0;
+  for(const device of yealinkDevices){
+    const tr=document.createElement('tr');
+    for(const value of [device.model,device.mac,device.extension,device.display_name,device.server_host]){
+      const td=document.createElement('td');td.textContent=value;tr.append(td)
+    }
+    const actions=document.createElement('td');
+    const rotate=document.createElement('button');rotate.textContent='Rotate credentials';
+    rotate.onclick=async()=>{
+      if(!confirm('Rotate provisioning credentials for '+device.mac+'? The old password will stop working.'))return;
+      try{
+        const result=await api('/devices/yealink/'+device.mac+'/credentials',{method:'POST'});
+        $('#yealink-result-url').value='https://'+location.host+'/provisioning/yealink/';
+        $('#yealink-result-user').value=result.provisioning_username;
+        $('#yealink-result-password').value=result.provisioning_password;
+        $('#yealink-result-dialog').showModal();
+        note('Provisioning credentials rotated. Save the new password now.');
+      }catch(error){note(error.message)}
+    };
+    const remove=document.createElement('button');remove.textContent='Revoke';
+    remove.onclick=async()=>{
+      if(!confirm('Revoke provisioning access for '+device.mac+'?'))return;
+      try{await api('/devices/yealink/'+device.mac,{method:'DELETE'});await refresh();note('Yealink device revoked')}
+      catch(error){note(error.message)}
+    };
+    actions.append(rotate,remove);tr.append(actions);$('#yealink-devices').append(tr)
+  }
   $('#extensions').replaceChildren();$('#empty').hidden=rows.length>0;
   for(const x of rows){
     const tr=document.createElement('tr');
