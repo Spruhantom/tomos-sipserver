@@ -54,6 +54,14 @@ class CiscoInventoryApiTests(unittest.TestCase):
         self.assertEqual(listed.json()[0]["hardware_test_status"], "not_tested")
         self.assertEqual(listed.json()[0]["compatibility"]["profile_generation"], "model_specific")
 
+    def test_disabled_extension_reports_cisco_profiles_as_not_generated(self):
+        self.assertEqual(self.register().status_code, 201)
+        disabled = self.client.post("/api/v1/extensions/125/disable", headers=self.headers)
+        self.assertEqual(disabled.status_code, 200)
+        device = self.client.get("/api/v1/devices/cisco", headers=self.headers).json()[0]
+        self.assertEqual(device["sccp_config_status"], "not_generated")
+        self.assertEqual(device["tftp_profile_status"], "not_generated")
+
     def test_only_initial_target_models_are_accepted(self):
         for model in ("7940", "7960", "7970"):
             response = self.register(mac=f"00:15:65:aa:bb:{int(model[-2:]):02x}", model=model)
