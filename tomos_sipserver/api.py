@@ -795,7 +795,7 @@ def create_app(
             "server_host": row["server_host"], "enabled": bool(row["enabled"]),
             "created_at": row["created_at"],
             "sccp_config_status": "generated" if row["enabled"] else "not_generated",
-            "tftp_profile_status": "generated",
+            "tftp_profile_status": "generated" if row["enabled"] else "not_generated",
             "hardware_test_status": "not_tested",
             "compatibility": model_compatibility(row["model"]),
         } for row in rows]
