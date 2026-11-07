@@ -58,6 +58,20 @@ def initialize_database(path: str | Path = DEFAULT_DB) -> None:
         """)
         connection.execute("CREATE INDEX IF NOT EXISTS admin_users_role_enabled_idx ON admin_users(role, enabled)")
         connection.execute("""
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                occurred_at TEXT NOT NULL,
+                actor_user_id INTEGER,
+                actor_username TEXT NOT NULL,
+                action TEXT NOT NULL,
+                target_user_id INTEGER,
+                target_username TEXT,
+                details_json TEXT NOT NULL DEFAULT '{}'
+            )
+        """)
+        connection.execute("CREATE INDEX IF NOT EXISTS audit_events_occurred_idx ON audit_events(id DESC)")
+        connection.execute("CREATE INDEX IF NOT EXISTS audit_events_action_idx ON audit_events(action, id DESC)")
+        connection.execute("""
             CREATE TABLE IF NOT EXISTS yealink_devices (
                 mac TEXT PRIMARY KEY,
                 extension TEXT NOT NULL REFERENCES extensions(extension) ON DELETE CASCADE,
