@@ -58,7 +58,7 @@ fi
 git -C "$SCCP_SOURCE_DIR" fetch --depth 1 origin "$SCCP_COMMIT"
 git -C "$SCCP_SOURCE_DIR" checkout --detach "$SCCP_COMMIT"
 cd "$SCCP_SOURCE_DIR"
-./configure
+./configure --with-asterisk=/usr
 make -j"$BUILD_JOBS"
 make install
 cd "$SOURCE_DIR"
