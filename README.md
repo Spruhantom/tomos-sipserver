@@ -58,6 +58,11 @@ The dashboard is served at `http://127.0.0.1:8000/`. Sign in using the one-time 
 - `GET /api/v1/devices/yealink` — list registered Yealink devices without provisioning secrets.
 - `POST /api/v1/devices/yealink/{mac}/credentials` — rotate a device's provisioning password and immediately revoke its previous password. The replacement is returned once.
 - `DELETE /api/v1/devices/yealink/{mac}` — revoke a phone's provisioning access.
+- `POST /api/v1/devices/grandstream` — register a Grandstream GRP2601/2602/2603/2604 against an enabled extension and issue a one-time per-device HTTP Basic password.
+- `GET /api/v1/devices/grandstream` — list registered Grandstream devices without provisioning secrets.
+- `POST /api/v1/devices/grandstream/{mac}/credentials` — rotate the device provisioning password and immediately revoke the old one.
+- `DELETE /api/v1/devices/grandstream/{mac}` — revoke a phone's provisioning access.
+- `GET /provisioning/grandstream/cfg{mac}.xml` — serve the Grandstream MAC-specific XML profile (lowercase MAC filename), authenticated with per-device Basic credentials over HTTPS. The XML uses Grandstream account aliases for SIP server, user ID, authentication ID/password and display name.
 - `GET /provisioning/yealink/{MAC}.cfg` — serve the generated Yealink CFG file. The phone must authenticate with its per-device HTTP Basic credentials over HTTPS. Configure the phone with the provisioning directory URL (`https://HOST/provisioning/yealink/`); Yealink then requests its lowercase MAC-specific CFG filename. The generated file starts with the required `#!version:1.0.0.1` header. The initial supported model allowlist covers selected SIP-T30/T31/T33/T40/T41/T42/T43/T46/T48/T53/T54/T57/T58 models; unsupported models are rejected rather than silently receiving an unverified profile.
 - `GET /api/v1/calls?limit=50&offset=0&start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&number=100&disposition=ANSWERED` — read filtered call-detail records (maximum 100 per page). Date bounds are inclusive; number matches caller ID, source or destination.
 - `GET /api/v1/calls/export.csv` — export matching call history as CSV (maximum 5,000 records per export). Spreadsheet formula-leading values are neutralised.
