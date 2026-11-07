@@ -16,7 +16,7 @@ def normalize_model(value: str) -> str:
     """Return a canonical Cisco model number from a narrowly allowlisted input."""
     if not isinstance(value, str):
         raise ValueError("Unsupported Cisco SCCP model")
-    candidate = re.sub(r"^Cisco\\s+", "", value.strip(), flags=re.IGNORECASE)
+    candidate = re.sub(r"^Cisco\s+", "", value.strip(), flags=re.IGNORECASE)
     candidate = candidate.upper().replace(" ", "")
     if candidate not in SUPPORTED_MODELS:
         raise ValueError("Unsupported Cisco model; supported inventory models are 7940, 7960 and 7970")
@@ -33,8 +33,8 @@ def render_sccp_config(
     resulting file contains the extension secret and must only be served on a
     trusted, isolated voice LAN.
     """
-    canonical_mac = normalize_mac(mac)
-    canonical_model = normalize_model(model)
+    normalize_mac(mac)
+    normalize_model(model)
     host = validate_server_host(server_host)
     if not isinstance(extension, str) or not EXTENSION_PATTERN.fullmatch(extension):
         raise ValueError("Invalid extension number")
@@ -52,8 +52,8 @@ def render_sccp_config(
     members = ET.SubElement(manager_group, "members")
     member = ET.SubElement(members, "member", {"priority": "0"})
     manager = ET.SubElement(member, "callManager")
-    ET.SubElement(manager, "ports")
-    ET.SubElement(manager.find("ports"), "ethernetPhonePort").text = str(sccp_port)
+    ports = ET.SubElement(manager, "ports")
+    ET.SubElement(ports, "ethernetPhonePort").text = str(sccp_port)
     ET.SubElement(manager, "processNodeName").text = host
     ET.SubElement(device, "loadInformation").text = ""
     ET.SubElement(device, "vendorConfig")
@@ -82,7 +82,7 @@ def render_sccp_config(
     ET.SubElement(line, "messageWaitingLampPolicy").text = "1"
 
     ET.indent(device, space="  ")
-    return ET.tostring(device, encoding="utf-8", xml_declaration=True).decode("utf-8") + "\\n"
+    return ET.tostring(device, encoding="utf-8", xml_declaration=True).decode("utf-8") + "\n"
 
 
 __all__ = [
