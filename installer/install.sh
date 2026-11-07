@@ -33,17 +33,17 @@ if [[ -r /etc/tomos-sipserver/api.env ]]; then
   EXISTING_ADMIN_USERNAME="$(sed -n 's/^TOMOS_ADMIN_USERNAME=//p' /etc/tomos-sipserver/api.env | tail -n 1 | tr -d '"')"
   EXISTING_ADMIN_PASSWORD="$(sed -n 's/^TOMOS_ADMIN_PASSWORD=//p' /etc/tomos-sipserver/api.env | tail -n 1 | tr -d '"')"
 fi
-ADMIN_USERNAME="\${TOMOS_ADMIN_USERNAME:-\${EXISTING_ADMIN_USERNAME:-admin}}"
-ADMIN_PASSWORD="\${TOMOS_ADMIN_PASSWORD:-\${EXISTING_ADMIN_PASSWORD:-}}"
-if [[ -t 0 && -t 1 ]]; then
-  read -r -p "TomOS administrator username [\${ADMIN_USERNAME}]: " entered_username
-  ADMIN_USERNAME="\${entered_username:-$ADMIN_USERNAME}"
-  if [[ -z "\${TOMOS_ADMIN_PASSWORD:-}" ]]; then
-    read -r -s -p "TomOS administrator password (leave blank to keep existing): " entered_password
-    printf '\n'
+ADMIN_USERNAME="${TOMOS_ADMIN_USERNAME:-${EXISTING_ADMIN_USERNAME:-admin}}"
+ADMIN_PASSWORD="${TOMOS_ADMIN_PASSWORD:-${EXISTING_ADMIN_PASSWORD:-}}"
+if [[ -r /dev/tty && -w /dev/tty ]]; then
+  read -r -p "TomOS administrator username [${ADMIN_USERNAME}]: " entered_username </dev/tty
+  ADMIN_USERNAME="${entered_username:-$ADMIN_USERNAME}"
+  if [[ -z "${TOMOS_ADMIN_PASSWORD:-}" ]]; then
+    read -r -s -p "TomOS administrator password (leave blank to keep existing): " entered_password </dev/tty
+    printf '\n' > /dev/tty
     if [[ -n "$entered_password" ]]; then
-      read -r -s -p "Confirm administrator password: " confirmed_password
-      printf '\n'
+      read -r -s -p "Confirm administrator password: " confirmed_password </dev/tty
+      printf '\n' > /dev/tty
       [[ "$entered_password" == "$confirmed_password" ]] || die "Administrator passwords do not match."
       ADMIN_PASSWORD="$entered_password"
     fi
@@ -54,7 +54,7 @@ if [[ -z "$ADMIN_PASSWORD" ]]; then
   ADMIN_PASSWORD="$(openssl rand -hex 24)"
   log "No interactive terminal or supplied administrator password; generated a secure password."
 fi
-[[ "\${#ADMIN_PASSWORD}" -ge 24 && "\${#ADMIN_PASSWORD}" -le 256 ]] || die "Administrator password must be between 24 and 256 characters."
+[[ "$ADMIN_PASSWORD" =~ ^[A-Za-z0-9._~-]{24,128}$ ]] || die "Administrator password must be 24-128 characters using letters, numbers, dot, underscore, tilde or hyphen."
 
 log "Installing Asterisk and API dependencies."
 apt-get update
