@@ -86,7 +86,7 @@ function renderDeviceProfile(){
     'Use the SIP account settings in your phone manufacturer’s account/line page.',
     'This is a generic manual SIP profile, not a vendor-specific auto-provisioning file.'
   ];
-  $('#device-profile').value=lines.join('\\n');
+  $('#device-profile').value=lines.join('\n');
   $('#device-warning').textContent=p.enabled?'The extension is enabled. Keep the SIP password private.': 'This extension is disabled and cannot register until you enable it.';
 }
 function openDeviceSetup(profile){
