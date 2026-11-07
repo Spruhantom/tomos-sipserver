@@ -35,7 +35,7 @@ async function loadCalls(){
   }
 }
 async function refresh(){
-  const [sum,rows,status]=await Promise.all([api('/dashboard/summary'),api('/extensions'),api('/dashboard/status')]);
+  const [sum,rows,status,yealinkDevices,grandstreamDevices,polycomDevices]=await Promise.all([api('/dashboard/summary'),api('/extensions'),api('/dashboard/status'),api('/devices/yealink'),api('/devices/grandstream'),api('/devices/polycom')]);
   $('#api-value').textContent='Online';
   $('#asterisk-value').textContent=status.status==='online'?'Online':'Offline';
   $('#uptime-value').textContent=status.uptime||'Uptime not available';
@@ -51,6 +51,90 @@ async function refresh(){
   $('#enabled-value').textContent=sum.extensions_enabled;
   $('#api-status').textContent='API online';
   await loadCalls();
+  $('#yealink-devices').replaceChildren();
+  $('#yealink-empty').hidden=yealinkDevices.length>0;
+  for(const device of yealinkDevices){
+    const tr=document.createElement('tr');
+    for(const value of [device.model,device.mac,device.extension,device.display_name,device.server_host]){
+      const td=document.createElement('td');td.textContent=value;tr.append(td)
+    }
+    const actions=document.createElement('td');
+    const rotate=document.createElement('button');rotate.textContent='Rotate credentials';
+    rotate.onclick=async()=>{
+      if(!confirm('Rotate provisioning credentials for '+device.mac+'? The old password will stop working.'))return;
+      try{
+        const result=await api('/devices/yealink/'+device.mac+'/credentials',{method:'POST'});
+        $('#yealink-result-url').value='https://'+location.host+'/provisioning/yealink/';
+        $('#yealink-result-user').value=result.provisioning_username;
+        $('#yealink-result-password').value=result.provisioning_password;
+        $('#yealink-result-dialog').showModal();
+        note('Provisioning credentials rotated. Save the new password now.');
+      }catch(error){note(error.message)}
+    };
+    const remove=document.createElement('button');remove.textContent='Revoke';
+    remove.onclick=async()=>{
+      if(!confirm('Revoke provisioning access for '+device.mac+'?'))return;
+      try{await api('/devices/yealink/'+device.mac,{method:'DELETE'});await refresh();note('Yealink device revoked')}
+      catch(error){note(error.message)}
+    };
+    actions.append(rotate,remove);tr.append(actions);$('#yealink-devices').append(tr)
+  }
+  $('#grandstream-devices').replaceChildren();
+  $('#grandstream-empty').hidden=grandstreamDevices.length>0;
+  for(const device of grandstreamDevices){
+    const tr=document.createElement('tr');
+    for(const value of [device.model,device.mac,device.extension,device.display_name,device.server_host]){
+      const td=document.createElement('td');td.textContent=value;tr.append(td)
+    }
+    const actions=document.createElement('td');
+    const rotate=document.createElement('button');rotate.textContent='Rotate credentials';
+    rotate.onclick=async()=>{
+      if(!confirm('Rotate provisioning credentials for '+device.mac+'? The old password will stop working.'))return;
+      try{
+        const result=await api('/devices/grandstream/'+device.mac+'/credentials',{method:'POST'});
+        $('#grandstream-result-url').value='https://'+location.host+'/provisioning/grandstream/';
+        $('#grandstream-result-user').value=result.provisioning_username;
+        $('#grandstream-result-password').value=result.provisioning_password;
+        $('#grandstream-result-dialog').showModal();
+        note('Grandstream credentials rotated. Save the new password now.');
+      }catch(error){note(error.message)}
+    };
+    const remove=document.createElement('button');remove.textContent='Revoke';
+    remove.onclick=async()=>{
+      if(!confirm('Revoke Grandstream provisioning access for '+device.mac+'?'))return;
+      try{await api('/devices/grandstream/'+device.mac,{method:'DELETE'});await refresh();note('Grandstream device revoked')}
+      catch(error){note(error.message)}
+    };
+    actions.append(rotate,remove);tr.append(actions);$('#grandstream-devices').append(tr)
+  }
+  $('#polycom-devices').replaceChildren();
+  $('#polycom-empty').hidden=polycomDevices.length>0;
+  for(const device of polycomDevices){
+    const tr=document.createElement('tr');
+    for(const value of [device.model,device.mac,device.extension,device.display_name,device.server_host]){
+      const td=document.createElement('td');td.textContent=value;tr.append(td)
+    }
+    const actions=document.createElement('td');
+    const rotate=document.createElement('button');rotate.textContent='Rotate credentials';
+    rotate.onclick=async()=>{
+      if(!confirm('Rotate provisioning credentials for '+device.mac+'? The old password will stop working.'))return;
+      try{
+        const result=await api('/devices/polycom/'+device.mac+'/credentials',{method:'POST'});
+        $('#polycom-result-url').value='https://'+location.host+'/provisioning/polycom/';
+        $('#polycom-result-user').value=result.provisioning_username;
+        $('#polycom-result-password').value=result.provisioning_password;
+        $('#polycom-result-dialog').showModal();
+        note('Polycom credentials rotated. Save the new password now.');
+      }catch(error){note(error.message)}
+    };
+    const remove=document.createElement('button');remove.textContent='Revoke';
+    remove.onclick=async()=>{
+      if(!confirm('Revoke Polycom provisioning access for '+device.mac+'?'))return;
+      try{await api('/devices/polycom/'+device.mac,{method:'DELETE'});await refresh();note('Polycom device revoked')}
+      catch(error){note(error.message)}
+    };
+    actions.append(rotate,remove);tr.append(actions);$('#polycom-devices').append(tr)
+  }
   $('#extensions').replaceChildren();$('#empty').hidden=rows.length>0;
   for(const x of rows){
     const tr=document.createElement('tr');
@@ -58,6 +142,9 @@ async function refresh(){
     const state=document.createElement('td'),pill=document.createElement('span');
     pill.className='pill '+(x.enabled?'':'off');pill.textContent=x.enabled?'Enabled':'Disabled';state.append(pill);tr.append(state);
     const actions=document.createElement('td');
+    const yealink=document.createElement('button');yealink.textContent='Provision Yealink';yealink.disabled=!x.enabled;yealink.onclick=()=>openYealinkSetup(x);actions.append(yealink);
+    const grandstream=document.createElement('button');grandstream.textContent='Provision Grandstream';grandstream.disabled=!x.enabled;grandstream.onclick=()=>openGrandstreamSetup(x);actions.append(grandstream);
+    const polycom=document.createElement('button');polycom.textContent='Provision Polycom';polycom.disabled=!x.enabled;polycom.onclick=()=>openPolycomSetup(x);actions.append(polycom);
     for(const [label,path,method] of [['Configure phone','/extensions/'+x.extension+'/provisioning','GET'],[x.enabled?'Disable':'Enable','/extensions/'+x.extension+'/'+(x.enabled?'disable':'enable'),'POST'],['Reset password','/extensions/'+x.extension+'/password','POST'],['Delete','/extensions/'+x.extension,'DELETE']]){
       const b=document.createElement('button');b.textContent=label;
       b.onclick=async()=>{if(method==='DELETE'&&!confirm('Delete extension '+x.extension+'?'))return;try{const d=await api(path,{method});if(method==='GET'){openDeviceSetup(d);return}if(d?.sip_password)secret(d.sip_password);await refresh();note('Extension updated')}catch(e){note(e.message)}};
@@ -99,6 +186,107 @@ function openDeviceSetup(profile){
   $('#device-dialog').showModal();
 }
 $('#device-server').oninput=renderDeviceProfile;
+let yealinkExtension=null;
+function openYealinkSetup(extension){
+  yealinkExtension=extension;
+  $('#yealink-extension-label').textContent=extension.display_name+' · extension '+extension.extension;
+  $('#yealink-mac').value='';
+  $('#yealink-model').value='SIP-T46U';
+  $('#yealink-host').value='';
+  $('#yealink-dialog').showModal();
+}
+$('#yealink-form').onsubmit=async e=>{
+  e.preventDefault();
+  if(!yealinkExtension)return;
+  const button=$('#yealink-form button.primary');button.disabled=true;
+  try{
+    const device=await api('/devices/yealink',{method:'POST',body:JSON.stringify({
+      extension:yealinkExtension.extension,mac:$('#yealink-mac').value.trim(),
+      model:$('#yealink-model').value.trim(),server_host:$('#yealink-host').value.trim()
+    })});
+    $('#yealink-dialog').close();
+    $('#yealink-result-url').value='https://'+location.host+'/provisioning/yealink/';
+    $('#yealink-result-user').value=device.provisioning_username;
+    $('#yealink-result-password').value=device.provisioning_password;
+    $('#yealink-result-dialog').showModal();
+    note('Yealink device registered. Save its provisioning credentials now.');
+  }catch(err){note(err.message)}
+  finally{button.disabled=false}
+};
+let grandstreamExtension=null;
+function openGrandstreamSetup(extension){
+  grandstreamExtension=extension;
+  $('#grandstream-extension-label').textContent=extension.display_name+' · extension '+extension.extension;
+  $('#grandstream-mac').value='';
+  $('#grandstream-model').value='GRP2601';
+  $('#grandstream-host').value='';
+  $('#grandstream-dialog').showModal();
+}
+$('#grandstream-form').onsubmit=async e=>{
+  e.preventDefault();
+  if(!grandstreamExtension)return;
+  const button=$('#grandstream-form button.primary');button.disabled=true;
+  try{
+    const device=await api('/devices/grandstream',{method:'POST',body:JSON.stringify({
+      extension:grandstreamExtension.extension,mac:$('#grandstream-mac').value.trim(),
+      model:$('#grandstream-model').value,server_host:$('#grandstream-host').value.trim()
+    })});
+    $('#grandstream-dialog').close();
+    $('#grandstream-result-url').value='https://'+location.host+'/provisioning/grandstream/';
+    $('#grandstream-result-user').value=device.provisioning_username;
+    $('#grandstream-result-password').value=device.provisioning_password;
+    $('#grandstream-result-dialog').showModal();
+    note('Grandstream device registered. Save its provisioning credentials now.');
+    await refresh();
+  }catch(err){note(err.message)}
+  finally{button.disabled=false}
+};
+let polycomExtension=null;
+function openPolycomSetup(extension){
+  polycomExtension=extension;
+  $('#polycom-extension-label').textContent=extension.display_name+' · extension '+extension.extension;
+  $('#polycom-mac').value='';
+  $('#polycom-model').value='VVX450';
+  $('#polycom-host').value='';
+  $('#polycom-port').value='5060';
+  $('#polycom-transport').value='UDP';
+  $('#polycom-dialog').showModal();
+}
+$('#polycom-form').onsubmit=async e=>{
+  e.preventDefault();
+  if(!polycomExtension)return;
+  const button=$('#polycom-form button.primary');button.disabled=true;
+  try{
+    const device=await api('/devices/polycom',{method:'POST',body:JSON.stringify({
+      extension:polycomExtension.extension,mac:$('#polycom-mac').value.trim(),
+      model:$('#polycom-model').value,server_host:$('#polycom-host').value.trim(),
+      server_port:Number($('#polycom-port').value),transport:$('#polycom-transport').value
+    })});
+    $('#polycom-dialog').close();
+    $('#polycom-result-url').value='https://'+location.host+'/provisioning/polycom/';
+    $('#polycom-result-user').value=device.provisioning_username;
+    $('#polycom-result-password').value=device.provisioning_password;
+    $('#polycom-result-dialog').showModal();
+    note('Polycom device registered. Save its provisioning credentials now.');
+    await refresh();
+  }catch(err){note(err.message)}
+  finally{button.disabled=false}
+};
+$('#copy-polycom-details').onclick=async()=>{
+  const details='Provisioning URL: '+$('#polycom-result-url').value+'\nUsername: '+$('#polycom-result-user').value+'\nPassword: '+$('#polycom-result-password').value;
+  try{await navigator.clipboard.writeText(details);note('Polycom provisioning details copied')}
+  catch(e){note('Could not copy provisioning details')}
+};
+$('#copy-grandstream-details').onclick=async()=>{
+  const details='Provisioning URL: '+$('#grandstream-result-url').value+'\nUsername: '+$('#grandstream-result-user').value+'\nPassword: '+$('#grandstream-result-password').value;
+  try{await navigator.clipboard.writeText(details);note('Grandstream provisioning details copied')}
+  catch(e){note('Could not copy provisioning details')}
+};
+$('#copy-yealink-details').onclick=async()=>{
+  const details='Provisioning URL: '+$('#yealink-result-url').value+'\nUsername: '+$('#yealink-result-user').value+'\nPassword: '+$('#yealink-result-password').value;
+  try{await navigator.clipboard.writeText(details);note('Yealink provisioning details copied')}
+  catch(e){note('Could not copy provisioning details')}
+};
 $('#copy-device-profile').onclick=async()=>{try{await navigator.clipboard.writeText($('#device-profile').value);note('Phone setup notes copied')}catch(e){note('Could not copy setup notes')}};
 $('#call-filters').onsubmit=async e=>{
   e.preventDefault();

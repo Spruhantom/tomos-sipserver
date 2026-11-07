@@ -4,7 +4,7 @@ A self-hosted home telephone system for Debian 13, built around Asterisk with a 
 
 ## Current status
 
-The Debian 13 Asterisk foundation passes CI. The repository now includes a source-build installer for Asterisk 22 LTS, PJSIP endpoints, an authenticated FastAPI extension-management API, SQLite persistence, a privileged configuration-apply helper and systemd units. The dashboard is a lightweight static interface served by FastAPI, with extension management, copyable generic SIP phone setup notes, live registration status and recent call history. Asterisk writes call-detail records to a separate local SQLite database; call audio is not recorded. WebRTC, Cisco SCCP and Yealink provisioning remain future stages.
+The Debian 13 Asterisk foundation passes CI. The repository includes a source-build installer for Asterisk 22 LTS, PJSIP endpoints, an authenticated FastAPI extension-management API, SQLite persistence, a privileged configuration-apply helper and systemd units. The dashboard provides extension management, generic SIP setup notes, live registration status, call history and an initial Yealink T-series provisioning workflow. Yealink profiles are generated per MAC address and protected by one-time HTTP Basic credentials; the provisioning endpoint requires HTTPS. Asterisk writes call-detail records to a separate local SQLite database; call audio is not recorded. Physical handset compatibility and end-to-end provisioning tests remain outstanding.
 
 ## Install (Debian 13 only)
 
@@ -54,6 +54,21 @@ The dashboard is served at `http://127.0.0.1:8000/`. Sign in using the one-time 
 - `POST /api/v1/extensions/{extension}/password` — rotate the SIP password and return it once.
 - `POST /api/v1/extensions/{extension}/enable` and `/disable` — enable or disable registration.
 - `DELETE /api/v1/extensions/{extension}` — delete an extension.
+- `POST /api/v1/devices/yealink` — register a Yealink phone against an enabled extension. Supply `extension`, `mac`, `model` and `server_host`. The response displays a unique HTTP Basic provisioning password once.
+- `GET /api/v1/devices/yealink` — list registered Yealink devices without provisioning secrets.
+- `POST /api/v1/devices/yealink/{mac}/credentials` — rotate a device's provisioning password and immediately revoke its previous password. The replacement is returned once.
+- `DELETE /api/v1/devices/yealink/{mac}` — revoke a phone's provisioning access.
+- `POST /api/v1/devices/grandstream` — register a Grandstream GRP2601/2602/2603/2604 against an enabled extension and issue a one-time per-device HTTP Basic password.
+- `GET /api/v1/devices/grandstream` — list registered Grandstream devices without provisioning secrets.
+- `POST /api/v1/devices/grandstream/{mac}/credentials` — rotate the device provisioning password and immediately revoke the old one.
+- `DELETE /api/v1/devices/grandstream/{mac}` — revoke a phone's provisioning access.
+- `POST /api/v1/devices/polycom` — register a Polycom VVX SIP phone (initial allowlist: VVX150/250/300/310/350/410/450/500/501/600/601/1500) and issue a one-time per-device HTTP Basic password. Optional SIP port and UDP/TCP/TLS transport are configurable.
+- `GET /api/v1/devices/polycom` — list Polycom devices without provisioning secrets.
+- `POST /api/v1/devices/polycom/{mac}/credentials` — rotate a Polycom device provisioning password.
+- `DELETE /api/v1/devices/polycom/{mac}` — revoke Polycom provisioning access.
+- `GET /provisioning/polycom/{mac}.cfg` — serve a MAC-specific Polycom VVX XML profile over HTTPS using per-device Basic authentication.
+- `GET /provisioning/grandstream/cfg{mac}.xml` — serve the Grandstream MAC-specific XML profile (lowercase MAC filename), authenticated with per-device Basic credentials over HTTPS. The XML uses Grandstream account aliases for SIP server, user ID, authentication ID/password and display name.
+- `GET /provisioning/yealink/{MAC}.cfg` — serve the generated Yealink CFG file. The phone must authenticate with its per-device HTTP Basic credentials over HTTPS. Configure the phone with the provisioning directory URL (`https://HOST/provisioning/yealink/`); Yealink then requests its lowercase MAC-specific CFG filename. The generated file starts with the required `#!version:1.0.0.1` header. The initial supported model allowlist covers selected SIP-T30/T31/T33/T40/T41/T42/T43/T46/T48/T53/T54/T57/T58 models; unsupported models are rejected rather than silently receiving an unverified profile.
 - `GET /api/v1/calls?limit=50&offset=0&start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&number=100&disposition=ANSWERED` — read filtered call-detail records (maximum 100 per page). Date bounds are inclusive; number matches caller ID, source or destination.
 - `GET /api/v1/calls/export.csv` — export matching call history as CSV (maximum 5,000 records per export). Spreadsheet formula-leading values are neutralised.
 
@@ -78,7 +93,7 @@ Each mutation regenerates PJSIP and dialplan configuration and requests an Aster
 - Unique extension passwords; no default SIP passwords.
 - The API requires a per-installation bearer token and listens only on loopback. Dashboard sessions use HttpOnly/SameSite cookies and CSRF validation; the browser does not store the API token. Dashboard login is rate-limited to five failed attempts per client address in a rolling five-minute window; a successful login clears that address's failure counter.
 - SIP passwords are not returned by list or update operations; they are returned only at creation/reset.
-- Keep administration on the LAN/VPN and use HTTPS with a trusted reverse proxy for remote dashboard access; enable secure cookies when TLS is configured.
+- Keep administration on the LAN/VPN and use HTTPS with a trusted reverse proxy for dashboard and phone provisioning access; enable secure cookies when TLS is configured. Configure the reverse proxy to forward the `/provisioning/` path to the API and set `X-Forwarded-Proto: https`.
 - Never expose AMI/ARI directly to browsers or untrusted networks.
 - Call audio recording is disabled; only CDR metadata (caller ID, extension numbers, timestamps, durations and outcomes) is stored. Set an appropriate retention period before production use.
 - A private PBX does not guarantee emergency calling; verify provider emergency-call support and keep an independent means of calling emergency services.
@@ -88,12 +103,12 @@ Each mutation regenerates PJSIP and dialplan configuration and requests an Aster
 1. **Foundation (passed CI):** Debian 13 source-build installer, Asterisk, PJSIP, internal extensions, systemd and CI.
 2. **Extension API (current):** authenticated FastAPI CRUD, SQLite persistence, password rotation, enable/disable and configuration rollback.
 3. **Dashboard (initial release):** password login, session/CSRF protection, extension listing, create, enable/disable, delete and one-time password reset display. Device registration, generic SIP setup notes and searchable call history, date/number/result filters and CSV export are now included.
-4. Provisioning (initial generic SIP setup notes available): tested Yealink HTTPS profiles and Cisco SCCP model-specific provisioning.
+4. **Vendor provisioning (in progress):** initial Yealink T-series MAC-specific CFG generation, per-device one-time HTTP Basic credentials, HTTPS-only retrieval and dashboard registration workflow are implemented. Next: validate model/firmware parameter compatibility on physical Yealink phones and test HTTPS reverse-proxy deployment. Device credential rotation and dashboard revoke controls are now included. Cisco SCCP remains future work.
 5. Browser phone: SIP.js, WSS, SRTP and persistent in-dashboard call controls.
 6. Home features: voicemail, call history, groups, forwarding, DND, backups and restore.
 7. Hardening/release: security review, hardware compatibility matrix and upgrade testing.
 
 ## Tests
 
-GitHub Actions runs Python renderer and API tests, Bash syntax/ShellCheck checks, and a Debian 13 job that downloads and verifies the pinned Asterisk source, compiles it, starts the PBX process, verifies PJSIP endpoints and dialplan, checks that the SQLite CDR backend records a generated answered Asterisk call, and verifies that record through the authenticated call-history API. This does not yet prove two-way audio between physical phones or call records from physical handsets.
+GitHub Actions runs Python renderer, API and Yealink provisioning tests, Bash syntax/ShellCheck checks, and a Debian 13 job that downloads and verifies the pinned Asterisk source, compiles it, starts the PBX process, verifies PJSIP endpoints and dialplan, checks that the SQLite CDR backend records a generated answered Asterisk call, and verifies that record through the authenticated call-history API. This does not yet prove two-way audio between physical phones or call records from physical handsets.
 
