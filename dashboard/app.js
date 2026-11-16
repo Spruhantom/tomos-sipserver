@@ -11,6 +11,7 @@ let webPhoneRegisterer=null;
 let webPhoneSession=null;
 let webPhoneSip=null;
 let webPhoneConfig=null;
+let autoPhoneAttempted=false;
 const api=async(path,opt={})=>{
   const h={'Content-Type':'application/json',...(opt.headers||{})};
   if(csrf&&opt.method&&opt.method!=='GET')h['X-Tomos-CSRF']=csrf;
@@ -70,6 +71,7 @@ async function refresh(){
   const [sum,rows,status,yealinkDevices,grandstreamDevices,polycomDevices,ciscoDevices]=await Promise.all([api('/dashboard/summary'),api('/extensions'),api('/dashboard/status'),api('/devices/yealink'),api('/devices/grandstream'),api('/devices/polycom'),api('/devices/cisco')]);
   updateWebPhoneExtensions(rows);
   if(currentUser?.role==='admin')await loadUsers();
+  await autoProvisionWebPhone();
   $('#api-value').textContent='Online';
   $('#asterisk-value').textContent=status.status==='online'?'Online':'Offline';
   $('#uptime-value').textContent=status.uptime||'Uptime not available';
@@ -476,6 +478,26 @@ async function disconnectWebPhone(){
     webPhoneStatus('Disconnected');webPhoneControls(false,false);
   }
 }
+async function autoProvisionWebPhone(){
+  if(autoPhoneAttempted||!currentUser||currentUser.role==='viewer')return;
+  autoPhoneAttempted=true;
+  try{
+    const assignment=await api('/me/webphone');
+    if(!assignment.assigned)return;
+    const select=$('#webphone-extension');
+    if(![...select.options].some(option=>option.value===assignment.extension)){
+      note('Your assigned browser phone extension is currently unavailable');
+      return;
+    }
+    select.value=assignment.extension;
+    $('#webphone-call-state').textContent='Provisioning assigned extension '+assignment.extension+'…';
+    await connectWebPhone();
+  }catch(error){
+    webPhoneStatus('Not connected');
+    $('#webphone-call-state').textContent='Assigned phone could not connect';
+    note('Assigned browser phone: '+error.message);
+  }
+}
 async function placeWebPhoneCall(){
   const target=$('#webphone-dial').value.trim();
   if(!/^[1-9][0-9]{2,5}$/.test(target)){note('Enter a valid internal extension number');return}
@@ -523,25 +545,31 @@ $('#webphone-mute').onclick=()=>{
   $('#webphone-mute').textContent=muted?'Unmute microphone':'Mute microphone';
 };
 
-$('#login-form').onsubmit=async e=>{e.preventDefault();try{const result=await api('/auth/login',{method:'POST',body:JSON.stringify({username:$('#username').value,password:$('#password').value})});currentUser=result.user;csrf=cookie('tomos_csrf');setupPromptChecked=false;showApp();await refresh();await checkFirstRunSetup()}catch(err){$('#login-error').textContent=err.message}};
-$('#logout').onclick=async()=>{try{await api('/auth/logout',{method:'POST'})}finally{await disconnectWebPhone();csrf='';currentUser=null;$('#change-password').hidden=true;$('#current-user').textContent='';showLogin()}};
+$('#login-form').onsubmit=async e=>{e.preventDefault();try{const result=await api('/auth/login',{method:'POST',body:JSON.stringify({username:$('#username').value,password:$('#password').value})});currentUser=result.user;csrf=cookie('tomos_csrf');setupPromptChecked=false;autoPhoneAttempted=false;showApp();await refresh();await checkFirstRunSetup()}catch(err){$('#login-error').textContent=err.message}};
+$('#logout').onclick=async()=>{try{await api('/auth/logout',{method:'POST'})}finally{await disconnectWebPhone();autoPhoneAttempted=false;csrf='';currentUser=null;$('#change-password').hidden=true;$('#current-user').textContent='';showLogin()}};
 $('#change-password').onclick=()=>$('#own-password-dialog').showModal();
 $('#own-password-form').onsubmit=async e=>{e.preventDefault();try{await api('/auth/password',{method:'POST',body:JSON.stringify({old_password:$('#own-old-password').value,new_password:$('#own-new-password').value})});$('#own-password-dialog').close();$('#own-password-form').reset();note('Your password has been changed')}catch(err){note(err.message)}};
 async function loadUsers(){
-  const users=await api('/users');
+  const [users,extensions]=await Promise.all([api('/users'),api('/extensions')]);
+  const assignable=extensions.filter(item=>item.protocol==='sip'&&item.enabled);
   const body=$('#users');body.replaceChildren();$('#users-empty').hidden=users.length>0;
   for(const user of users){
     const row=document.createElement("tr");
     for(const value of [user.username,user.role]){const cell=document.createElement("td");cell.textContent=value;row.append(cell)}
     const status=document.createElement("td"),pill=document.createElement("span");pill.className="pill "+(user.enabled?"":"off");pill.textContent=user.enabled?"Enabled":"Disabled";status.append(pill);row.append(status);
     const actions=document.createElement("td");
+    const assignment=document.createElement("select");assignment.setAttribute("aria-label","Phone extension for "+user.username);
+    const unassigned=document.createElement("option");unassigned.value="";unassigned.textContent="No phone assigned";assignment.append(unassigned);
+    for(const extension of assignable){const option=document.createElement("option");option.value=extension.extension;option.textContent=extension.extension+" · "+extension.display_name;assignment.append(option)}
+    assignment.value=user.assigned_extension||"";
+    assignment.onchange=async()=>{try{await api("/users/"+user.id,{method:"PATCH",body:JSON.stringify({assigned_extension:assignment.value||null})});await loadUsers();note("User phone assignment updated")}catch(error){note(error.message);assignment.value=user.assigned_extension||""}};
     const role=document.createElement("select");role.setAttribute("aria-label","Role for "+user.username);
     for(const [value,label] of [["admin","Administrator"],["operator","Operator"],["viewer","Read-only viewer"]]){const option=document.createElement("option");option.value=value;option.textContent=label;role.append(option)}
     role.value=user.role;role.onchange=async()=>{try{await api("/users/"+user.id,{method:"PATCH",body:JSON.stringify({role:role.value})});await loadUsers();note("Account role updated")}catch(error){note(error.message);role.value=user.role}};
     const toggle=document.createElement("button");toggle.textContent=user.enabled?"Disable":"Enable";toggle.onclick=async()=>{if(user.id===currentUser.id&&user.enabled){note("You cannot disable your own account");return}if(!confirm((user.enabled?"Disable ":"Enable ")+user.username+"?"))return;try{await api("/users/"+user.id,{method:"PATCH",body:JSON.stringify({enabled:!user.enabled})});await loadUsers();note("Account status updated")}catch(error){note(error.message)}};
     const reset=document.createElement("button");reset.textContent="Reset password";reset.onclick=()=>{resetUserId=user.id;$("#user-password-label").textContent="Set a new password for "+user.username+".";$("#user-reset-password").value="";$("#user-password-dialog").showModal()};
     const remove=document.createElement("button");remove.textContent="Delete";remove.disabled=user.id===currentUser.id;remove.onclick=async()=>{if(!confirm("Permanently delete account "+user.username+"?"))return;try{await api("/users/"+user.id,{method:"DELETE"});await loadUsers();note("Account deleted")}catch(error){note(error.message)}};
-    actions.append(role,toggle,reset,remove);row.append(actions);body.append(row);
+    actions.append(assignment,role,toggle,reset,remove);row.append(actions);body.append(row);
   }
   await loadAudit();
 }
