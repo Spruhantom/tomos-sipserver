@@ -13,12 +13,11 @@ import json
 import os
 import shutil
 import sqlite3
-import stat
 import sys
 import tarfile
 import tempfile
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 DEFAULT_DEST = Path("/var/backups/tomos-sipserver")
 FILES = {
@@ -108,22 +107,48 @@ def verify_archive(archive: Path) -> dict:
         raise ValueError("Backup archive must be a regular file")
     with tarfile.open(archive, "r:gz") as bundle:
         members = bundle.getmembers()
-        allowed = {"manifest.json"}
-        manifest_member = next((m for m in members if m.name == "manifest.json"), None)
-        if manifest_member is None or not manifest_member.isfile():
+        if len(members) > len(FILES) + 3:
+            raise ValueError("Backup archive contains too many members")
+        by_name = {}
+        allowed_payload = set(FILES) | {"cdr.db"}
+        for member in members:
+            name = member.name
+            if chr(92) in name:
+                raise ValueError("Backup archive contains an unsafe path")
+            path = PurePosixPath(name)
+            if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
+                raise ValueError("Backup archive contains an unsafe path")
+            if name in by_name:
+                raise ValueError("Backup archive contains duplicate paths")
+            if name not in {"manifest.json", "payload"} and not (
+                name.startswith("payload/") and name[8:] in allowed_payload
+            ):
+                raise ValueError("Archive contains an unexpected path")
+            if name == "payload":
+                if not member.isdir():
+                    raise ValueError("Backup payload directory is invalid")
+            elif not member.isfile():
+                raise ValueError("Backup archive contains a non-regular member")
+            if member.size > 1024 * 1024 * 1024:
+                raise ValueError("Backup archive member exceeds the size limit")
+            by_name[name] = member
+
+        manifest_member = by_name.get("manifest.json")
+        if manifest_member is None:
             raise ValueError("Backup manifest is missing")
-        manifest_file = bundle.extractfile(manifest_member)
-        manifest = json.load(manifest_file)
+        manifest = json.load(bundle.extractfile(manifest_member))
         if manifest.get("format") != 1 or not isinstance(manifest.get("files"), list):
             raise ValueError("Unsupported backup format")
         declared = set()
         for entry in manifest["files"]:
+            if not isinstance(entry, dict):
+                raise ValueError("Invalid backup manifest entry")
             name = entry.get("name")
-            if name not in set(FILES) | {"cdr.db"} or name in declared:
+            if name not in allowed_payload or name in declared:
                 raise ValueError("Backup contains an unexpected or duplicate filename")
             declared.add(name)
-            member = next((m for m in members if m.name == f"payload/{name}"), None)
-            if member is None or not member.isfile():
+            member = by_name.get(f"payload/{name}")
+            if member is None:
                 raise ValueError(f"Backup payload missing: {name}")
             stream = bundle.extractfile(member)
             digest = hashlib.sha256()
@@ -133,10 +158,10 @@ def verify_archive(archive: Path) -> dict:
                 size += len(chunk)
             if digest.hexdigest() != entry.get("sha256") or size != entry.get("size"):
                 raise ValueError(f"Checksum mismatch: {name}")
-        if any(m.name not in {"manifest.json", "payload"} and not m.name.startswith("payload/") for m in members):
-            raise ValueError("Archive contains an unexpected path")
+        actual_payload = {name[8:] for name in by_name if name.startswith("payload/")}
+        if actual_payload != declared:
+            raise ValueError("Backup contains undeclared payload files")
         return manifest
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
