@@ -252,5 +252,5 @@ else
 fi
 log "Open http://127.0.0.1:8000/ on the server or use a trusted HTTPS reverse proxy."
 log "Extension API listens on 127.0.0.1:8000; use a trusted HTTPS reverse proxy for remote administration."
-log "SIP: UDP 5060; SCCP: TCP 2000; RTP: UDP 10000-20000. Restrict access to your trusted LAN/VPN."
+log "SIP: UDP 5060; SCCP: TCP 2000; WebRTC WSS: TCP 8089; RTP: UDP 10000-20000. Restrict access to your trusted LAN/VPN."
 log "No router port forwarding, public SIP exposure or SIP trunk has been configured."
