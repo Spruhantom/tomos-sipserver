@@ -46,7 +46,7 @@ def apply(reload_asterisk: bool = True) -> None:
         cisco_rows = connection.execute(
             """SELECT d.mac, d.model, d.server_host, e.extension, e.display_name
                FROM cisco_devices d JOIN extensions e ON e.extension = d.extension
-               WHERE e.enabled = 1 AND e.protocol = 'sccp' ORDER BY d.mac"""
+               WHERE e.enabled = 1 ORDER BY d.mac"""
         ).fetchall()
     extensions = [(str(number), str(password)) for number, password in rows]
     sccp_extensions = sorted({str(row[3]) for row in cisco_rows})
