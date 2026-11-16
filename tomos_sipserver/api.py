@@ -1212,12 +1212,14 @@ def create_app(
             ).fetchone()
         if row is None or not row["user_enabled"]:
             raise HTTPException(status_code=401, detail="Dashboard account is unavailable")
-        if not row["assigned_extension"]:
-            return {"assigned": False, "extension": None}
-        if row["protocol"] != "sip" or not row["extension_enabled"]:
-            return {"assigned": False, "extension": None}
-        config = extension_webrtc_config(row["assigned_extension"], request, principal)
-        return {"assigned": True, "extension": row["assigned_extension"], "phone": json.loads(config.body)}
+        if not row["assigned_extension"] or row["protocol"] != "sip" or not row["extension_enabled"]:
+            payload = {"assigned": False, "extension": None}
+        else:
+            config = extension_webrtc_config(row["assigned_extension"], request, principal)
+            payload = {"assigned": True, "extension": row["assigned_extension"], "phone": json.loads(config.body)}
+        return Response(content=json.dumps(payload), media_type="application/json",
+                        headers={"Cache-Control": "no-store, private", "Pragma": "no-cache",
+                                 "X-Content-Type-Options": "nosniff"})
 
     @app.get("/api/v1/extensions/{extension}/webrtc", tags=["WebRTC"])
     def extension_webrtc_config(extension: str, request: Request,
