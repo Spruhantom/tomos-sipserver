@@ -217,6 +217,12 @@ jobs:
           printf '%s\n' "$DIALPLAN"
           grep -Fq '100' <<<"$DIALPLAN"
           grep -Fq '101' <<<"$DIALPLAN"
+          grep -Fq 'tomos-country-outbound' <<<"$DIALPLAN"
+          UK_DIALPLAN="$(asterisk -rx 'dialplan show tomos-country-outbound')"
+          grep -Fq '_0[1-9]X.' <<<"$UK_DIALPLAN"
+          grep -Fq '_00X.' <<<"$UK_DIALPLAN"
+          grep -Fq '999' <<<"$UK_DIALPLAN"
+          grep -Fq '112' <<<"$UK_DIALPLAN"
 
           API_TOKEN=ci-integration-token-0123456789abcdef0123456789abcdef
           runuser -u tomos -- env \
