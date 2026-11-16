@@ -130,6 +130,16 @@ def restore_archive(archive: Path, root: Path = Path("/"), service_control=None,
                 for name, path in paths.items()}
     control = service_control or _systemctl
     validate = validator or _validate_live
+    pre_restore_backup = None
+    if root == Path("/"):
+        script = Path(__file__).resolve().parents[1] / "scripts" / "tomos-sipserver-backup"
+        loader = importlib.machinery.SourceFileLoader("tomos_backup_snapshot", str(script))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        module = importlib.util.module_from_spec(spec)
+        import sys
+        sys.modules[spec.name] = module
+        loader.exec_module(module)
+        pre_restore_backup = str(module.build_archive(Path("/var/backups/tomos-sipserver/pre-restore")))
     was_active = {}
     stopped = []
     try:
@@ -149,9 +159,14 @@ def restore_archive(archive: Path, root: Path = Path("/"), service_control=None,
                 path.write_bytes(data)
                 os.chmod(path, mode)
         validate(root)
+        if "asterisk.service" in stopped:
+            control("start", "asterisk.service")
+            validate(root)
         for service in stopped:
-            control("start", service)
-        return {"restored": sorted(staged), "services_restarted": stopped}
+            if service != "asterisk.service":
+                control("start", service)
+        return {"restored": sorted(staged), "services_restarted": stopped,
+                "pre_restore_backup": pre_restore_backup}
     except Exception:
         rollback_errors = []
         for name, (data, mode) in previous.items():
