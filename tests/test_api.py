@@ -246,6 +246,52 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertEqual(login.status_code, 200)
         self.assertEqual(self.client.get("/api/v1/extensions/129/webrtc").status_code, 403)
 
+    def test_user_assignment_auto_provisions_only_the_assigned_browser_phone(self):
+        extension = self.client.post("/api/v1/extensions", headers=self.headers,
+                                     json={"extension": "130", "display_name": "Tom's desk"})
+        self.assertEqual(extension.status_code, 201)
+        created = self.client.post("/api/v1/users", headers=self.headers,
+                                   json={"username": "phoneuser", "password": "phone-user-password-012345", "role": "operator"})
+        self.assertEqual(created.status_code, 201)
+        user_id = created.json()["id"]
+        assigned = self.client.patch(f"/api/v1/users/{user_id}", headers=self.headers,
+                                     json={"assigned_extension": "130"})
+        self.assertEqual(assigned.status_code, 200)
+        self.assertEqual(assigned.json()["assigned_extension"], "130")
+        login = self.client.post("/api/v1/auth/login",
+                                 json={"username": "phoneuser", "password": "phone-user-password-012345"})
+        self.assertEqual(login.status_code, 200)
+        personal = self.client.get("/api/v1/me/webphone")
+        self.assertEqual(personal.status_code, 200)
+        payload = personal.json()
+        self.assertTrue(payload["assigned"])
+        self.assertEqual(payload["extension"], "130")
+        self.assertEqual(payload["phone"]["authorization_username"], "130-web")
+        self.assertEqual(payload["phone"]["media_encryption"], "DTLS-SRTP")
+        self.assertNotIn("password", payload["phone"])
+        self.client.post("/api/v1/auth/logout")
+        self.assertEqual(self.client.get("/api/v1/me/webphone").status_code, 403)
+
+    def test_extension_assignment_is_unique_and_sip_only(self):
+        self.client.post("/api/v1/extensions", headers=self.headers,
+                         json={"extension": "131", "display_name": "Assigned SIP"})
+        self.client.post("/api/v1/extensions", headers=self.headers,
+                         json={"extension": "132", "display_name": "Cisco", "protocol": "sccp"})
+        first = self.client.post("/api/v1/users", headers=self.headers,
+                                 json={"username": "firstphone", "password": "first-phone-password-012345", "role": "operator"}).json()
+        second = self.client.post("/api/v1/users", headers=self.headers,
+                                  json={"username": "secondphone", "password": "second-phone-password-012345", "role": "operator"}).json()
+        self.assertEqual(self.client.patch(f"/api/v1/users/{first['id']}", headers=self.headers,
+                                           json={"assigned_extension": "131"}).status_code, 200)
+        self.assertEqual(self.client.patch(f"/api/v1/users/{second['id']}", headers=self.headers,
+                                           json={"assigned_extension": "131"}).status_code, 409)
+        self.assertEqual(self.client.patch(f"/api/v1/users/{second['id']}", headers=self.headers,
+                                           json={"assigned_extension": "132"}).status_code, 409)
+        unassigned = self.client.patch(f"/api/v1/users/{first['id']}", headers=self.headers,
+                                       json={"assigned_extension": None})
+        self.assertEqual(unassigned.status_code, 200)
+        self.assertIsNone(unassigned.json()["assigned_extension"])
+
     def test_extension_protocol_is_explicit_and_sccp_does_not_return_sip_secret(self):
         sip = self.client.post("/api/v1/extensions", headers=self.headers,
                                json={"extension": "140", "display_name": "SIP phone"})
