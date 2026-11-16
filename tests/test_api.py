@@ -219,7 +219,7 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         config = response.json()
         self.assertEqual(config["websocket_url"], "wss://testserver:8089/ws")
-        self.assertEqual(config["sip_uri"], "sip:webrtc-126@testserver")
+        self.assertEqual(config["sip_uri"], "sip:webrtc-aor-126@testserver")
         self.assertEqual(config["authorization_username"], "126-web")
         self.assertGreaterEqual(len(config["authorization_password"]), 24)
         self.assertTrue(config["secure_media"])
