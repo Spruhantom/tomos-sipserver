@@ -50,6 +50,13 @@ def apply(reload_asterisk: bool = True) -> None:
                FROM cisco_devices d JOIN extensions e ON e.extension = d.extension
                WHERE e.enabled = 1 ORDER BY d.mac"""
         ).fetchall()
+        try:
+            settings_row = connection.execute(
+                "SELECT country_code FROM setup_state WHERE id = 1"
+            ).fetchone()
+            country_code = str(settings_row[0]) if settings_row and settings_row[0] in {"GB", "INTL"} else "GB"
+        except sqlite3.OperationalError:
+            country_code = "GB"
     extensions = [(str(row[0]), str(row[1])) for row in rows]
     webrtc_extensions = [(str(row[0]), str(row[2])) for row in rows if row[2]]
     webrtc_numbers = [number for number, _ in webrtc_extensions]
@@ -79,7 +86,7 @@ def apply(reload_asterisk: bool = True) -> None:
     }
     try:
         renderer.atomic_write(paths[0], renderer.render_pjsip(extensions, webrtc_extensions))
-        renderer.atomic_write(paths[1], renderer.render_dialplan(extensions, sccp_extensions, webrtc_numbers))
+        renderer.atomic_write(paths[1], renderer.render_dialplan(extensions, sccp_extensions, webrtc_numbers, country_code=country_code))
         renderer.atomic_write(paths[2], "".join(config for config, _ in cisco_configs.values()))
         for path in paths:
             os.chown(path, 0, asterisk_gid)
