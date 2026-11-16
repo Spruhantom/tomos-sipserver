@@ -70,10 +70,15 @@ def render_dialplan(extensions: list[tuple[str, str]], sccp_extensions: list[str
         " same => n,Echo()", " same => n,Hangup()",
     ]
     for number in sorted(numbers):
-        technology = "SCCP" if number in sccp_numbers else "PJSIP"
+        if number in sip_numbers and number in sccp_numbers:
+            technology = f"PJSIP/{number}&SCCP/{number}"
+        elif number in sccp_numbers:
+            technology = f"SCCP/{number}"
+        else:
+            technology = f"PJSIP/{number}"
         lines.extend([
             f"exten => {number},1,NoOp(TomOS internal call to {number})",
-            f" same => n,Dial({technology}/{number},30)", " same => n,Hangup()",
+            f" same => n,Dial({technology},30)", " same => n,Hangup()",
         ])
     lines.extend([
         "exten => _1XX,1,NoOp(TomOS three-digit internal extension)",
