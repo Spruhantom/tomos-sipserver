@@ -36,8 +36,9 @@ def load_renderer():
 def cli(command: str) -> None:
     result = subprocess.run(["/usr/sbin/asterisk", "-rx", command], capture_output=True, text=True, timeout=20)
     output = (result.stdout + result.stderr).strip()
-    if result.returncode != 0 or "Unable to connect" in output or "No such command" in output:
+    if result.returncode != 0 or any(marker in output.lower() for marker in ("unable to connect", "no such command", "failed to", "error parsing", "configuration error")):
         raise RuntimeError(f"Asterisk command failed ({command}): {output[-1000:]}")
+    return output
 
 
 def apply(reload_asterisk: bool = True) -> None:
@@ -112,6 +113,11 @@ def apply(reload_asterisk: bool = True) -> None:
             cli("pjsip reload")
             cli("dialplan reload")
             cli("sccp reload")
+            transports = cli("pjsip show transports")
+            if trunk is not None and trunk.enabled:
+                expected_transport = {"udp": "transport-udp", "tcp": "transport-tcp", "tls": "transport-tls"}[trunk.transport]
+                if expected_transport not in transports:
+                    raise RuntimeError(f"Expected PJSIP transport was not loaded: {expected_transport}")
     except Exception:
         for path in paths:
             old = previous[path]
@@ -133,8 +139,8 @@ def apply(reload_asterisk: bool = True) -> None:
                 cli("pjsip reload")
                 cli("dialplan reload")
                 cli("sccp reload")
-            except Exception:
-                pass
+            except Exception as rollback_error:
+                raise RuntimeError("Configuration apply failed and Asterisk rollback reload also failed") from rollback_error
         raise
 
 
