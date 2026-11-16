@@ -71,6 +71,10 @@ def initialize_database(path: str | Path = DEFAULT_DB) -> None:
                 updated_at TEXT NOT NULL
             )
         """)
+        admin_user_columns = {row["name"] for row in connection.execute("PRAGMA table_info(admin_users)")}
+        if "assigned_extension" not in admin_user_columns:
+            connection.execute("ALTER TABLE admin_users ADD COLUMN assigned_extension TEXT")
+        connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS admin_users_assigned_extension_idx ON admin_users(assigned_extension) WHERE assigned_extension IS NOT NULL")
         connection.execute("CREATE INDEX IF NOT EXISTS admin_users_role_enabled_idx ON admin_users(role, enabled)")
         connection.execute("""
             CREATE TABLE IF NOT EXISTS setup_state (
