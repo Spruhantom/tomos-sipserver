@@ -25,6 +25,8 @@ jobs:
         run: |
           bash -n install.sh installer/install.sh scripts/tomos-sipserver-check scripts/tomos-sipserver-apply-config
           shellcheck --severity=error install.sh installer/install.sh scripts/tomos-sipserver-check scripts/tomos-sipserver-apply-config
+      - name: Check dashboard JavaScript syntax
+        run: node --check dashboard/app.js
       - name: Install API test dependencies
         run: python -m pip install -r requirements-dev.txt
       - name: Run Python tests
