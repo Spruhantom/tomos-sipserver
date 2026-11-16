@@ -86,5 +86,38 @@ class RestoreTests(unittest.TestCase):
                 os.geteuid = original
 
 
+
+    def test_service_start_failure_stops_started_services_before_rollback(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "root"; root.mkdir()
+            target = root / "var/lib/tomos-sipserver/extensions.db"
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"original bytes")
+            archive = self._backup(Path(temp))
+            events = []
+            failed_once = {"value": False}
+
+            def control(action, service):
+                events.append((action, service))
+                if action == "is-active":
+                    return True
+                if action == "start" and service == "tomos-sipserver.service" and not failed_once["value"]:
+                    failed_once["value"] = True
+                    raise RuntimeError("simulated service start failure")
+                return True
+
+            with self.assertRaisesRegex(RuntimeError, "simulated service start failure"):
+                restore.restore_archive(archive, root=root, service_control=control,
+                                        validator=lambda _root: None)
+
+            self.assertEqual(target.read_bytes(), b"original bytes")
+            # Asterisk was started with the candidate restore, so it must be
+            # stopped before the old files are put back and then restarted.
+            asterisk_start = events.index(("start", "asterisk.service"))
+            rollback_stop = events.index(("stop", "asterisk.service"), asterisk_start + 1)
+            rollback_restart = events.index(("start", "asterisk.service"), rollback_stop + 1)
+            self.assertLess(asterisk_start, rollback_stop)
+            self.assertLess(rollback_stop, rollback_restart)
+
 if __name__ == "__main__":
     unittest.main()
