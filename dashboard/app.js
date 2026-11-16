@@ -27,10 +27,18 @@ async function checkFirstRunSetup(){
   if(setupPromptChecked||currentUser?.role!=='admin')return;
   const state=await api('/setup/status');
   setupPromptChecked=true;
+  $('#setup-country').value=state.country_code||'GB';
   if(state.completed)return;
   $('#setup-asterisk-state').textContent=state.asterisk==='online'?'Asterisk is online':'Asterisk needs attention';
   $('#setup-extension-count').textContent=state.extensions_count+' extension'+(state.extensions_count===1?'':'s')+' configured';
   $('#first-run-setup').hidden=false;
+}
+async function loadTelephonySettings(){
+  if(currentUser?.role!=='admin')return;
+  const settings=await api('/settings/telephony');
+  $('#telephony-country').value=settings.country_code||'GB';
+  if($('#setup-country'))$('#setup-country').value=settings.country_code||'GB';
+  $('#telephony-settings').hidden=false;
 }
 function cookie(n){return document.cookie.split('; ').find(x=>x.startsWith(n+'='))?.split('=').slice(1).join('=')||''}
 function secret(s){$('#secret-value').textContent=s;$('#secret-dialog').showModal()}
@@ -70,7 +78,7 @@ function updateWebPhoneExtensions(rows){
 async function refresh(){
   const [sum,rows,status,yealinkDevices,grandstreamDevices,polycomDevices,ciscoDevices]=await Promise.all([api('/dashboard/summary'),api('/extensions'),api('/dashboard/status'),api('/devices/yealink'),api('/devices/grandstream'),api('/devices/polycom'),api('/devices/cisco')]);
   updateWebPhoneExtensions(rows);
-  if(currentUser?.role==='admin')await loadUsers();
+  if(currentUser?.role==='admin'){await loadUsers();await loadTelephonySettings()}
   await autoProvisionWebPhone();
   $('#api-value').textContent='Online';
   $('#asterisk-value').textContent=status.status==='online'?'Online':'Offline';
@@ -622,8 +630,22 @@ $('#setup-add-phone').onclick=()=>$('#new-extension').click();
 $('#setup-later').onclick=()=>{$('#first-run-setup').hidden=true;note('Setup reminder saved for your next sign-in')};
 $('#setup-complete').onclick=async()=>{
   const button=$('#setup-complete');button.disabled=true;
-  try{await api('/setup/complete',{method:'POST'});$('#first-run-setup').hidden=true;note('First-run setup completed. You can manage phones and extensions any time.')}
-  catch(error){note(error.message)}
+  try{
+    const result=await api('/setup/complete',{method:'POST',body:JSON.stringify({country_code:$('#setup-country').value||'GB'})});
+    $('#telephony-country').value=result.country_code;
+    $('#first-run-setup').hidden=true;
+    note('First-run setup completed. '+(result.country_code==='GB'?'United Kingdom dial plan applied.':'International/manual profile applied.'));
+  }catch(error){note(error.message)}
+  finally{button.disabled=false}
+};
+$('#telephony-settings-form').onsubmit=async event=>{
+  event.preventDefault();
+  const button=$('#telephony-settings-form button');button.disabled=true;
+  try{
+    const result=await api('/settings/telephony',{method:'PUT',body:JSON.stringify({country_code:$('#telephony-country').value})});
+    $('#setup-country').value=result.country_code;
+    note('Country dial-plan profile saved and Asterisk configuration reloaded.');
+  }catch(error){note(error.message)}
   finally{button.disabled=false}
 };
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>b.closest('dialog').close());
