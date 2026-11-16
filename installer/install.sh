@@ -10,7 +10,7 @@ die() { printf '[TomOS SIP] ERROR: %s\n' "$*" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
-for required in scripts/render-config.py scripts/tomos-sipserver-check scripts/tomos-sipserver-apply-config tomos_sipserver/api.py tomos_sipserver/db.py tomos_sipserver/installer_credentials.py dashboard/index.html dashboard/app.js dashboard/style.css requirements.txt systemd/asterisk.service systemd/tomos-sipserver.service systemd/tomos-sipserver-api.service sudoers/tomos-sipserver-api asterisk/asterisk.conf asterisk/modules.conf asterisk/logger.conf asterisk/rtp.conf asterisk/cdr.conf asterisk/cdr_sqlite3_custom.conf asterisk/sccp.conf; do
+for required in scripts/render-config.py scripts/tomos-sipserver-check scripts/tomos-sipserver-apply-config tomos_sipserver/api.py tomos_sipserver/db.py tomos_sipserver/installer_credentials.py dashboard/index.html dashboard/app.js dashboard/style.css requirements.txt systemd/asterisk.service systemd/tomos-sipserver.service systemd/tomos-sipserver-api.service sudoers/tomos-sipserver-api asterisk/asterisk.conf asterisk/modules.conf asterisk/logger.conf asterisk/rtp.conf asterisk/cdr.conf asterisk/cdr_sqlite3_custom.conf asterisk/sccp.conf asterisk/http.conf; do
   [[ -f "$REPO_ROOT/$required" ]] || die "Missing project file: $required (use a complete repository checkout)."
 done
 
@@ -105,7 +105,7 @@ ldconfig
 install -d -m 0750 /etc/asterisk/tomos-backups
 BACKUP_DIR="/etc/asterisk/tomos-backups/$(date -u +%Y%m%dT%H%M%SZ)"
 install -d -m 0750 "$BACKUP_DIR"
-for name in asterisk.conf modules.conf logger.conf rtp.conf cdr.conf cdr_sqlite3_custom.conf pjsip.conf extensions.conf sccp.conf; do
+for name in asterisk.conf modules.conf logger.conf rtp.conf cdr.conf cdr_sqlite3_custom.conf pjsip.conf extensions.conf sccp.conf http.conf; do
   if [[ -f "/etc/asterisk/$name" ]]; then cp -a "/etc/asterisk/$name" "$BACKUP_DIR/$name"; fi
 done
 log "Existing Asterisk configuration backed up to $BACKUP_DIR."
@@ -191,6 +191,19 @@ install -D -m 0644 "$REPO_ROOT/systemd/tomos-sipserver-api.service" /etc/systemd
 
 install -m 0644 "$REPO_ROOT/asterisk/asterisk.conf" /etc/asterisk/asterisk.conf
 install -m 0644 "$REPO_ROOT/asterisk/modules.conf" /etc/asterisk/modules.conf
+install -m 0644 "$REPO_ROOT/asterisk/http.conf" /etc/asterisk/http.conf
+install -d -o root -g asterisk -m 0750 /etc/asterisk/keys
+if [[ ! -s /etc/asterisk/keys/asterisk.crt || ! -s /etc/asterisk/keys/asterisk.key ]]; then
+  openssl req -x509 -nodes -newkey rsa:3072 -days 30 \
+    -keyout /etc/asterisk/keys/asterisk.key \
+    -out /etc/asterisk/keys/asterisk.crt \
+    -subj "/CN=localhost" \
+    -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+  log "Created a 30-day bootstrap TLS certificate. Install a browser-trusted certificate for your PBX hostname before using the web phone."
+fi
+chown root:asterisk /etc/asterisk/keys/asterisk.crt /etc/asterisk/keys/asterisk.key
+chmod 0644 /etc/asterisk/keys/asterisk.crt
+chmod 0640 /etc/asterisk/keys/asterisk.key
 install -m 0640 "$REPO_ROOT/asterisk/sccp.conf" /etc/asterisk/sccp.conf
 install -m 0644 "$REPO_ROOT/asterisk/logger.conf" /etc/asterisk/logger.conf
 install -m 0644 "$REPO_ROOT/asterisk/rtp.conf" /etc/asterisk/rtp.conf
