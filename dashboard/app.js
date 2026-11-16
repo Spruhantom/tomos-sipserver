@@ -378,10 +378,9 @@ $('#create-form').onsubmit=async e=>{
   e.preventDefault();
   const button=$('#create-form button.primary');button.disabled=true;
   const extension=$('#number').value.trim(),protocol=$('#protocol').value;
-  let created=false;
   try{
     const payload={extension,display_name:$('#display-name').value.trim(),protocol};
-    const result=await api('/extensions',{method:'POST',body:JSON.stringify(payload)});created=true;
+    const result=await api('/extensions',{method:'POST',body:JSON.stringify(payload)});
     if(protocol==='sip'){
       $('#create-dialog').close();$('#create-form').reset();secret(result.sip_password);
       note('SIP extension created');
@@ -393,7 +392,7 @@ $('#create-form').onsubmit=async e=>{
         })});
       }catch(error){
         try{await api('/extensions/'+extension,{method:'DELETE'})}catch(rollback){note('Cisco setup failed and the new extension could not be rolled back: '+rollback.message)}
-        created=false;throw error;
+        throw error;
       }
       $('#create-dialog').close();$('#create-form').reset();
       note('SCCP extension and Cisco profile created. Handset firmware and physical compatibility still need testing.');
