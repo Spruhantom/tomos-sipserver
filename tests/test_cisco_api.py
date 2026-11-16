@@ -19,7 +19,7 @@ class CiscoInventoryApiTests(unittest.TestCase):
         ), base_url="https://testserver")
         created = self.client.post(
             "/api/v1/extensions", headers=self.headers,
-            json={"extension": "125", "display_name": "Workshop"},
+            json={"extension": "125", "display_name": "Workshop", "protocol": "sccp"},
         )
         self.assertEqual(created.status_code, 201)
 
@@ -99,6 +99,21 @@ class CiscoInventoryApiTests(unittest.TestCase):
         )
         self.assertEqual(deleted.status_code, 204)
         self.assertEqual(self.client.get("/api/v1/devices/cisco", headers=self.headers).json(), [])
+
+    def test_sip_extension_cannot_be_assigned_to_cisco_sccp_handset(self):
+        token = "sip-only-token-" + "x" * 40
+        client = TestClient(create_app(
+            Path(self.tmp.name) / "sip-only.db", token, lambda: None,
+            admin_password="admin-test-password-0123456789",
+        ), base_url="https://testserver")
+        headers = {"Authorization": "Bearer " + token}
+        client.post("/api/v1/extensions", headers=headers,
+                    json={"extension": "126", "display_name": "SIP desk"})
+        response = client.post("/api/v1/devices/cisco", headers=headers, json={
+            "extension": "126", "mac": "00:15:65:aa:bb:dd",
+            "model": "7940", "server_host": "192.168.1.10",
+        })
+        self.assertEqual(response.status_code, 409)
 
     def test_inventory_requires_admin_authentication(self):
         self.assertEqual(self.client.get("/api/v1/devices/cisco").status_code, 401)
