@@ -56,6 +56,20 @@ class TelephonySettingsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     country_code: str = Field(default="GB", pattern=r"^(GB|INTL)$")
 
+class TrunkConfigUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    host: str = Field(min_length=1, max_length=253)
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+    port: int = Field(default=5060, ge=1, le=65535)
+    transport: str = Field(default="udp", pattern=r"^(udp|tcp|tls)$")
+    outbound_caller_id: str = Field(default="", max_length=16)
+
+class TrunkSecretRotate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    password: str = Field(min_length=1, max_length=256)
+
+
 class UserUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     role: str | None = Field(default=None, pattern=r"^(admin|operator|viewer)$")
@@ -416,6 +430,45 @@ def create_app(
             "country_code": state["country_code"],
             "asterisk": get_status().get("status", "unknown"),
         }
+
+    def trunk_helper(operation: str, payload: dict | None = None) -> dict:
+        request_data = {"operation": operation, **(payload or {})}
+        try:
+            result = subprocess.run(
+                ["/usr/bin/sudo", "-n", "/usr/local/sbin/tomos-sipserver-trunk"],
+                input=json.dumps(request_data), check=False, capture_output=True,
+                text=True, timeout=12,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise HTTPException(status_code=503, detail="Trunk management helper is unavailable") from error
+        if result.returncode != 0:
+            # The helper must never echo submitted secrets in its error output.
+            raise HTTPException(status_code=400, detail=(result.stderr or "Trunk operation failed").strip()[-300:])
+        try:
+            response = json.loads(result.stdout)
+        except json.JSONDecodeError as error:
+            raise HTTPException(status_code=503, detail="Trunk helper returned an invalid response") from error
+        if not isinstance(response, dict):
+            raise HTTPException(status_code=503, detail="Trunk helper returned an invalid response")
+        return response
+
+    @app.get("/api/v1/trunk", tags=["trunk"])
+    def get_trunk(principal: dict = Depends(require_admin)):
+        return trunk_helper("status")
+
+    @app.put("/api/v1/trunk", tags=["trunk"])
+    def put_trunk(payload: TrunkConfigUpdate, principal: dict = Depends(require_admin)):
+        # Save only; the helper forces enabled=false. Provider connectivity and
+        # live Asterisk application are intentionally separate later steps.
+        return trunk_helper("save", payload.model_dump())
+
+    @app.post("/api/v1/trunk/rotate", tags=["trunk"])
+    def rotate_trunk(payload: TrunkSecretRotate, principal: dict = Depends(require_admin)):
+        return trunk_helper("rotate", {"password": payload.password})
+
+    @app.post("/api/v1/trunk/disable", tags=["trunk"])
+    def disable_trunk(principal: dict = Depends(require_admin)):
+        return trunk_helper("disable")
 
     @app.get("/api/v1/settings/telephony", tags=["settings"])
     def get_telephony_settings(principal: dict = Depends(require_admin)):
