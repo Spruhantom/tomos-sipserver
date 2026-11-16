@@ -1,3 +1,5 @@
+import hashlib
+import importlib.util
 import io
 import json
 import tarfile
@@ -5,12 +7,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts_backup_import_placeholder import verify_archive
+SPEC = importlib.util.spec_from_file_location(
+    "tomos_backup", Path(__file__).resolve().parents[1] / "scripts" / "tomos-sipserver-backup"
+)
+BACKUP = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(BACKUP)
+verify_archive = BACKUP.verify_archive
 
 
 class BackupArchiveTests(unittest.TestCase):
-    def _archive(self, path: Path, payload: bytes, digest: str | None = None):
-        import hashlib
+    def _archive(self, path: Path, payload: bytes, digest: str | None = None,
+                 extra_member: str | None = None):
         checksum = digest or hashlib.sha256(payload).hexdigest()
         manifest = {"format": 1, "created_at": "test", "files": [
             {"name": "pjsip.conf", "sha256": checksum, "size": len(payload)}
@@ -23,6 +30,10 @@ class BackupArchiveTests(unittest.TestCase):
             info = tarfile.TarInfo("payload/pjsip.conf")
             info.size = len(payload)
             archive.addfile(info, io.BytesIO(payload))
+            if extra_member:
+                info = tarfile.TarInfo(extra_member)
+                info.size = 1
+                archive.addfile(info, io.BytesIO(b"x"))
 
     def test_valid_archive_verifies(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -41,12 +52,8 @@ class BackupArchiveTests(unittest.TestCase):
     def test_path_traversal_member_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             archive = Path(directory) / "backup.tar.gz"
-            self._archive(archive, b"safe")
-            with tarfile.open(archive, "a:gz") as bundle:
-                info = tarfile.TarInfo("../escape")
-                info.size = 1
-                bundle.addfile(info, io.BytesIO(b"x"))
-            with self.assertRaises((ValueError, tarfile.TarError)):
+            self._archive(archive, b"safe", extra_member="../escape")
+            with self.assertRaises(ValueError):
                 verify_archive(archive)
 
 
