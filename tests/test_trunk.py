@@ -1,6 +1,6 @@
 import unittest
 
-from tomos_sipserver.trunk import Trunk, render_trunk_pjsip, validate_trunk
+from tomos_sipserver.trunk import Trunk, render_trunk_pjsip, render_trunk_transport, validate_trunk
 
 
 class TrunkValidationTests(unittest.TestCase):
@@ -27,6 +27,28 @@ class TrunkValidationTests(unittest.TestCase):
             validate_trunk(Trunk("bad host", "account", "secret"))
         with self.assertRaises(ValueError):
             validate_trunk(Trunk("sip.example.net", "account", "secret", transport="sctp"))
+
+    def test_tls_transport_enforces_peer_verification(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as directory:
+            ca = Path(directory) / "ca.pem"
+            ca.write_text("test CA bundle")
+            rendered = render_trunk_transport(
+                Trunk("sip.example.net", "account", "secret", transport="tls"),
+                str(ca),
+            )
+            self.assertIn("protocol=tls", rendered)
+            self.assertIn("verify_server=yes", rendered)
+            self.assertIn("method=tlsv1_2", rendered)
+            self.assertIn(f"ca_list_file={ca}", rendered)
+
+    def test_tls_transport_rejects_missing_ca_bundle(self):
+        with self.assertRaises(ValueError):
+            render_trunk_transport(
+                Trunk("sip.example.net", "account", "secret", transport="tls"),
+                "/missing/provider-ca.pem",
+            )
 
     def test_caller_id_must_be_e164(self):
         with self.assertRaises(ValueError):
