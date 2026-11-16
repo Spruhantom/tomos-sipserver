@@ -41,6 +41,25 @@ class RenderConfigTests(unittest.TestCase):
         self.assertIn("Dial(PJSIP/101,30)", dialplan)
         self.assertIn("Dial(PJSIP/${EXTEN},30)", dialplan)
 
+    def test_generates_dedicated_dtls_srtp_webrtc_endpoint(self):
+        pjsip = render_config.render_pjsip(
+            [("100", "a" * 24)], [("100", "b" * 24)]
+        )
+        self.assertIn("[transport-wss]", pjsip)
+        self.assertIn("protocol=wss", pjsip)
+        self.assertIn("[webrtc-100]", pjsip)
+        self.assertIn("username=100-web", pjsip)
+        self.assertIn("media_encryption=dtls", pjsip)
+        self.assertIn("dtls_auto_generate_cert=yes", pjsip)
+        self.assertIn("ice_support=yes", pjsip)
+        self.assertIn("rtcp_mux=yes", pjsip)
+
+    def test_routes_inbound_calls_to_desk_and_browser_clients(self):
+        dialplan = render_config.render_dialplan(
+            [("100", "a" * 24)], webrtc_extensions=["100"]
+        )
+        self.assertIn("Dial(PJSIP/100&PJSIP/webrtc-100,30)", dialplan)
+
     def test_routes_sccp_extensions_to_chan_sccp(self):
         dialplan = render_config.render_dialplan([("100", "a" * 24)], ["200"])
         self.assertIn("Dial(PJSIP/100,30)", dialplan)
