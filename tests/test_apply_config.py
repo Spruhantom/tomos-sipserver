@@ -23,7 +23,7 @@ class ApplyConfigTests(unittest.TestCase):
             connection.execute("CREATE TABLE extensions (extension TEXT, password TEXT, enabled INTEGER, display_name TEXT, protocol TEXT NOT NULL DEFAULT 'sip')")
             connection.executemany(
                 "INSERT INTO extensions VALUES (?, ?, ?, ?, ?)",
-                [("100", "a" * 32, 1, "Front Desk", "sccp"), ("101", "b" * 32, 0, "Disabled", "sip"), ("102", "c" * 32, 1, "Reception", "sccp")],
+                [("100", "a" * 32, 1, "Front Desk", "sccp"), ("101", "b" * 32, 0, "Disabled", "sip"), ("102", "c" * 32, 1, "Reception", "sccp"), ("103", "d" * 32, 1, "Legacy dual", "sip")],
             )
             connection.execute(
                 """CREATE TABLE cisco_devices (
@@ -37,6 +37,10 @@ class ApplyConfigTests(unittest.TestCase):
             connection.execute(
                 "INSERT INTO cisco_devices VALUES (?, ?, ?, ?, ?)",
                 ("001565AABBDD", "102", "7970", "192.168.1.10", "2026-01-01T00:00:00Z"),
+            )
+            connection.execute(
+                "INSERT INTO cisco_devices VALUES (?, ?, ?, ?, ?)",
+                ("001565AABBEE", "103", "7940", "192.168.1.10", "2026-01-01T00:00:00Z"),
             )
         (self.config / "pjsip.conf").write_text("old pjsip\n")
         (self.config / "extensions.conf").write_text("old dialplan\n")
@@ -68,11 +72,14 @@ class ApplyConfigTests(unittest.TestCase):
         self.assertNotIn("[100]", pjsip)
         self.assertNotIn("[102]", pjsip)
         self.assertNotIn("[101]", pjsip)
+        self.assertIn("[103]", pjsip)
         self.assertIn("exten => 100,1", dialplan)
         self.assertIn("Dial(SCCP/100,30)", dialplan)
         self.assertIn("Dial(SCCP/102,30)", dialplan)
+        self.assertIn("Dial(PJSIP/103&SCCP/103,30)", dialplan)
         self.assertNotIn("exten => 101,1", dialplan)
         self.assertIn("[SEP001565AABBCC]", sccp)
+        self.assertIn("[SEP001565AABBEE]", sccp)
         self.assertIn("devicetype = 7960", sccp)
         self.assertIn("button = line, 100", sccp)
         self.assertIn("[100]", sccp)
