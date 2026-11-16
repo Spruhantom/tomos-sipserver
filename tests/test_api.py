@@ -276,6 +276,9 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/v1/extensions/133/webrtc").status_code, 403)
         self.client.post("/api/v1/auth/logout")
         self.assertEqual(self.client.get("/api/v1/me/webphone").status_code, 401)
+        self.assertEqual(self.client.delete("/api/v1/extensions/130", headers=self.headers).status_code, 204)
+        users = self.client.get("/api/v1/users", headers=self.headers).json()
+        self.assertIsNone(next(user for user in users if user["id"] == user_id)["assigned_extension"])
 
     def test_viewer_accounts_cannot_be_assigned_browser_phones(self):
         self.client.post("/api/v1/extensions", headers=self.headers,
