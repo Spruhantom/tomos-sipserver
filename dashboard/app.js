@@ -640,6 +640,16 @@ $('#setup-complete').onclick=async()=>{
   }catch(error){note(error.message)}
   finally{button.disabled=false}
 };
+async function loadTrunkSettings(){
+  const panel=$('#trunk-settings');
+  if(!panel || panel.hidden)return;
+  try{const state=await api('/trunk');$('#trunk-state').textContent=state.configured?'Configured · disabled · secret '+(state.secret_configured?'stored':'missing'):'Not configured · external calls disabled';
+    if(state.configured){$('#trunk-host').value=state.host||'';$('#trunk-username').value=state.username||'';$('#trunk-port').value=state.port||5060;$('#trunk-transport').value=state.transport||'udp';$('#trunk-caller-id').value=state.outbound_caller_id||'';$('#trunk-password').required=false;$('#trunk-password').placeholder='Leave blank to keep stored password';}
+  }catch(error){$('#trunk-state').textContent='Trunk status unavailable: '+error.message}
+}
+$('#trunk-settings-form').onsubmit=async event=>{event.preventDefault();const password=$('#trunk-password').value;if(!password){note('Enter a provider password to save or use password rotation.');return}const button=$('#trunk-settings-form button');button.disabled=true;try{await api('/trunk',{method:'PUT',body:JSON.stringify({host:$('#trunk-host').value.trim(),username:$('#trunk-username').value.trim(),password,port:Number($('#trunk-port').value),transport:$('#trunk-transport').value,outbound_caller_id:$('#trunk-caller-id').value.trim()})});$('#trunk-password').value='';await loadTrunkSettings();note('Trunk credentials saved securely. External calling remains disabled.')}catch(error){note(error.message)}finally{button.disabled=false}};
+$('#trunk-rotate').onclick=async()=>{const password=prompt('Enter the new SIP provider password. It will not be shown again.');if(password===null)return;if(!password){note('A new password is required.');return}try{await api('/trunk/rotate',{method:'POST',body:JSON.stringify({password})});$('#trunk-password').value='';await loadTrunkSettings();note('Provider password rotated. Trunk remains disabled.')}catch(error){note(error.message)}};
+$('#trunk-disable').onclick=async()=>{if(!confirm('Disable the SIP trunk?'))return;try{await api('/trunk/disable',{method:'POST'});await loadTrunkSettings();note('SIP trunk disabled.')}catch(error){note(error.message)}};
 $('#telephony-settings-form').onsubmit=async event=>{
   event.preventDefault();
   const button=$('#telephony-settings-form button');button.disabled=true;
