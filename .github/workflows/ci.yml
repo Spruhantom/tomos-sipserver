@@ -109,23 +109,6 @@ jobs:
           python3 scripts/render-config.py --output-dir /etc/asterisk \
             --extension "100:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
             --extension "101:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path("/etc/asterisk/extensions.conf")
-          config = path.read_text(encoding="utf-8")
-          marker = "[tomos-internal]"
-          if config.count(marker) != 1:
-              raise SystemExit("expected exactly one generated [tomos-internal] context")
-          start = config.index(marker) + len(marker)
-          # Insert directly after the [tomos-internal] header. This avoids
-          # relying on context-boundary detection when the generated UK
-          # country profile adds another context later in the file.
-          fixture = "\nexten => 900,1,Set(CALLERID(num)=100)\n same => n,Answer()\n same => n,Wait(1)\n same => n,Hangup()\n"
-          config = config[:start] + fixture + config[start:]
-          path.write_text(config, encoding="utf-8")
-          PY
-          chown root:asterisk /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
-          chmod 0640 /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
       - name: Prepare API integration environment
         shell: bash
         run: |
@@ -148,6 +131,22 @@ jobs:
             --seed-extension "100:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
             --seed-extension "101:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
           PYTHONPATH=/opt/tomos-sipserver/app /opt/tomos-sipserver/venv/bin/python -m tomos_sipserver.apply_config --no-reload
+          # apply_config regenerates extensions.conf, so add the CI-only test
+          # extension after it has finished writing the production dialplan.
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("/etc/asterisk/extensions.conf")
+          config = path.read_text(encoding="utf-8")
+          marker = "[tomos-internal]"
+          if config.count(marker) != 1:
+              raise SystemExit("expected exactly one generated [tomos-internal] context")
+          start = config.index(marker) + len(marker)
+          fixture = "\nexten => 900,1,Set(CALLERID(num)=100)\n same => n,Answer()\n same => n,Wait(1)\n same => n,Hangup()\n"
+          config = config[:start] + fixture + config[start:]
+          path.write_text(config, encoding="utf-8")
+          PY
+          chown root:asterisk /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
+          chmod 0640 /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
           chown tomos:tomos /var/lib/tomos-sipserver/extensions.db
           install -D -o root -g root -m 0755 scripts/tomos-sipserver-apply-config /usr/local/sbin/tomos-sipserver-apply-config
           install -D -o root -g root -m 0755 scripts/tomos-sipserver-status /usr/local/sbin/tomos-sipserver-status
@@ -178,7 +177,12 @@ jobs:
           test -f /var/lib/tomos-sipserver/cdr/cdr.db
           asterisk -rx 'dialplan reload'
           TEST_EXTENSION="$(asterisk -rx 'dialplan show 900@tomos-internal')"
-          grep -Fq '900@tomos-internal' <<<"$TEST_EXTENSION"
+          printf '%s\\n' "$TEST_EXTENSION"
+          if grep -Fq 'No such extension/context' <<<"$TEST_EXTENSION" \\
+            || ! grep -Eq "^[[:space:]]*'900'[[:space:]]*=>" <<<"$TEST_EXTENSION"; then
+            echo "CI test extension 900 was not loaded in tomos-internal" >&2
+            exit 1
+          fi
           asterisk -rx 'channel originate Local/900@tomos-internal application Wait 1'
           CDR_READY=0
           for attempt in $(seq 1 15); do
