@@ -46,3 +46,12 @@ implemented. Existing internal calling is unchanged.
 The administrator dashboard now provides a trunk settings panel backed by four admin-only API operations: read safe status, save credentials, rotate the provider secret, and disable the trunk. The API calls a fixed-purpose root helper through a narrowly scoped sudoers entry; secrets are sent on standard input rather than command-line arguments and are never included in API responses or helper errors. The root helper stores credentials through the atomic root-only trunk store. The password field is never pre-populated, and a saved trunk remains disabled.
 
 This is credential management only. It does not yet create provider transport definitions, validate provider TLS certificates, register to a live provider, install outbound routes, or enable external calls. Selecting TLS in the dashboard records the preference only; it is not an indication that TLS is configured or active. Provider-specific interoperability still requires the provider's documented registrar, proxy, authentication and certificate requirements.
+
+
+## SIP provider TLS baseline
+
+The trunk renderer now defines a verified outbound TLS transport for a configured TLS trunk: TLS 1.2, server-certificate verification enabled, client-certificate verification disabled unless a provider later requires mutual TLS, and an explicit CA bundle. There is no insecure verify_server=no fallback. This is a generic PJSIP TLS baseline, not a claim of carrier interoperability. Registrar/proxy addresses, authentication realm, outbound proxy, codecs, registration mode, CA requirements and caller-ID policy must be confirmed against the selected provider before activation.
+
+## Restore procedure and safeguards
+
+The restore engine is exposed through the backup utility's `restore ARCHIVE --yes` command. It verifies the archive manifest and checksums, reads only allowlisted members into staging, checks SQLite integrity, refuses a trunk backup marked enabled, snapshots the current files, stops only services that were active, atomically replaces staged files, validates Asterisk and restarts previously active services. On failure it restores the prior files and attempts to restart the previously active services. CI exercises staged restore and validation-failure rollback using temporary directories and mocked service controls; a full live Debian VM restore drill remains required before production sign-off.
