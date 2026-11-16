@@ -20,10 +20,10 @@ class ApplyConfigTests(unittest.TestCase):
         self.config.mkdir()
         self.renderer = Path(__file__).resolve().parents[1] / "scripts" / "render-config.py"
         with sqlite3.connect(self.db) as connection:
-            connection.execute("CREATE TABLE extensions (extension TEXT, password TEXT, enabled INTEGER, display_name TEXT)")
+            connection.execute("CREATE TABLE extensions (extension TEXT, password TEXT, enabled INTEGER, display_name TEXT, protocol TEXT NOT NULL DEFAULT 'sip')")
             connection.executemany(
-                "INSERT INTO extensions VALUES (?, ?, ?, ?)",
-                [("100", "a" * 32, 1, "Front Desk"), ("101", "b" * 32, 0, "Disabled"), ("102", "c" * 32, 1, "Reception")],
+                "INSERT INTO extensions VALUES (?, ?, ?, ?, ?)",
+                [("100", "a" * 32, 1, "Front Desk", "sccp"), ("101", "b" * 32, 0, "Disabled", "sip"), ("102", "c" * 32, 1, "Reception", "sccp")],
             )
             connection.execute(
                 """CREATE TABLE cisco_devices (
@@ -65,9 +65,12 @@ class ApplyConfigTests(unittest.TestCase):
         dialplan = (self.config / "extensions.conf").read_text()
         sccp = (self.config / "tomos-sccp-devices.conf").read_text()
         xml = (self.tftp / "SEP001565AABBCC.cnf.xml").read_text()
-        self.assertIn("[100]", pjsip)
+        self.assertNotIn("[100]", pjsip)
+        self.assertNotIn("[102]", pjsip)
         self.assertNotIn("[101]", pjsip)
         self.assertIn("exten => 100,1", dialplan)
+        self.assertIn("Dial(SCCP/100,30)", dialplan)
+        self.assertIn("Dial(SCCP/102,30)", dialplan)
         self.assertNotIn("exten => 101,1", dialplan)
         self.assertIn("[SEP001565AABBCC]", sccp)
         self.assertIn("devicetype = 7960", sccp)
