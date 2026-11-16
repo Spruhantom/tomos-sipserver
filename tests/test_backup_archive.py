@@ -1,4 +1,5 @@
 import hashlib
+import importlib.machinery
 import importlib.util
 import io
 import json
@@ -8,12 +9,12 @@ import unittest
 import sys
 from pathlib import Path
 
-SPEC = importlib.util.spec_from_file_location(
-    "tomos_backup", Path(__file__).resolve().parents[1] / "scripts" / "tomos-sipserver-backup"
-)
+BACKUP_PATH = Path(__file__).resolve().parents[1] / "scripts" / "tomos-sipserver-backup"
+LOADER = importlib.machinery.SourceFileLoader("tomos_backup", str(BACKUP_PATH))
+SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
 BACKUP = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = BACKUP
-SPEC.loader.exec_module(BACKUP)
+LOADER.exec_module(BACKUP)
 verify_archive = BACKUP.verify_archive
 
 
@@ -54,7 +55,7 @@ class BackupArchiveTests(unittest.TestCase):
     def test_path_traversal_member_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             archive = Path(directory) / "backup.tar.gz"
-            self._archive(archive, b"safe", extra_member="../escape")
+            self._archive(archive, b"safe", extra_member="payload/../../escape")
             with self.assertRaises(ValueError):
                 verify_archive(archive)
 
