@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""Narrow root-only JSON bridge for dashboard SIP trunk administration."""
+from __future__ import annotations
+import json
+import sys
+from pathlib import Path
+from tomos_sipserver.trunk_store import configure_trunk, disable_trunk, public_status, rotate_secret
+
+def main() -> int:
+    try:
+        request = json.load(sys.stdin)
+        if not isinstance(request, dict):
+            raise ValueError("Invalid request")
+        operation = request.get("operation")
+        if operation == "status" and set(request) == {"operation"}:
+            response = public_status()
+        elif operation == "save" and set(request) == {"operation", "host", "username", "password", "port", "transport", "outbound_caller_id"}:
+            configure_trunk(request["host"], request["username"], request["password"], request["port"], request["transport"], request["outbound_caller_id"])
+            response = {"configured": True, "enabled": False, "message": "Trunk credentials saved; external calling remains disabled."}
+        elif operation == "rotate" and set(request) == {"operation", "password"}:
+            rotate_secret(request["password"])
+            response = {"configured": True, "enabled": False, "message": "Trunk secret rotated; external calling remains disabled."}
+        elif operation == "disable" and set(request) == {"operation"}:
+            disable_trunk()
+            response = {"configured": bool(public_status().get("configured")), "enabled": False, "message": "Trunk disabled."}
+        else:
+            raise ValueError("Unsupported trunk operation or request fields")
+        print(json.dumps(response, separators=(",", ":")))
+        return 0
+    except Exception as error:
+        # Deliberately omit exception text: validation errors can include input.
+        print(type(error).__name__ + ": trunk operation rejected", file=sys.stderr)
+        return 1
+
+if __name__ == "__main__":
+    raise SystemExit(main())
