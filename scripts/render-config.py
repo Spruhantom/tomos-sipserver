@@ -45,6 +45,7 @@ def render_pjsip(extensions: list[tuple[str, str]],
         "[transport-udp]", "type=transport", "protocol=udp", "bind=0.0.0.0:5060",
         "local_net=10.0.0.0/8", "local_net=172.16.0.0/12",
         "local_net=192.168.0.0/16", "",
+        "[transport-tcp]", "type=transport", "protocol=tcp", "bind=0.0.0.0:5060", "",
         "; Browser clients use the Asterisk HTTPS server on TCP 8089.",
         "[transport-wss]", "type=transport", "protocol=wss", "bind=0.0.0.0", "",
     ]

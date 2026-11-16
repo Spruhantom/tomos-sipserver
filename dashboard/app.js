@@ -21,8 +21,8 @@ const api=async(path,opt={})=>{
   if(!r.ok){let d={};try{d=await r.json()}catch{}throw Error(d.detail||'Request failed')}
   return r.status===204?null:r.json()
 };
-function showLogin(){if(typeof webPhoneUa!=='undefined'&&webPhoneUa)disconnectWebPhone().catch(()=>{});telephonySettingsLoaded=false;$('#telephony-settings').hidden=true;$('#login').hidden=false;$('#app').hidden=true;$('#logout').hidden=true;$('#change-password').hidden=true;$('#current-user').textContent='';currentUser=null}
-function showApp(){$('#login').hidden=true;$('#app').hidden=false;$('#logout').hidden=false;$('#change-password').hidden=false;$('#current-user').textContent=currentUser?currentUser.username+' · '+currentUser.role:'';$('#app').classList.toggle('role-viewer',currentUser?.role==='viewer');$('#app').classList.toggle('role-operator',currentUser?.role==='operator');$('#user-management').hidden=currentUser?.role!=='admin';$('#telephony-settings').hidden=currentUser?.role!=='admin';}
+function showLogin(){if(typeof webPhoneUa!=='undefined'&&webPhoneUa)disconnectWebPhone().catch(()=>{});telephonySettingsLoaded=false;$('#telephony-settings').hidden=true;$('#trunk-settings').hidden=true;$('#login').hidden=false;$('#app').hidden=true;$('#logout').hidden=true;$('#change-password').hidden=true;$('#current-user').textContent='';currentUser=null}
+function showApp(){$('#login').hidden=true;$('#app').hidden=false;$('#logout').hidden=false;$('#change-password').hidden=false;$('#current-user').textContent=currentUser?currentUser.username+' · '+currentUser.role:'';$('#app').classList.toggle('role-viewer',currentUser?.role==='viewer');$('#app').classList.toggle('role-operator',currentUser?.role==='operator');$('#user-management').hidden=currentUser?.role!=='admin';$('#telephony-settings').hidden=currentUser?.role!=='admin';$('#trunk-settings').hidden=currentUser?.role!=='admin';}
 function note(s){const n=$('#notice');n.textContent=s;n.style.display='block';setTimeout(()=>n.style.display='none',3200)}
 async function checkFirstRunSetup(){
   if(setupPromptChecked||currentUser?.role!=='admin')return;
@@ -80,7 +80,7 @@ function updateWebPhoneExtensions(rows){
 async function refresh(){
   const [sum,rows,status,yealinkDevices,grandstreamDevices,polycomDevices,ciscoDevices]=await Promise.all([api('/dashboard/summary'),api('/extensions'),api('/dashboard/status'),api('/devices/yealink'),api('/devices/grandstream'),api('/devices/polycom'),api('/devices/cisco')]);
   updateWebPhoneExtensions(rows);
-  if(currentUser?.role==='admin'){await loadUsers();await loadTelephonySettings()}
+  if(currentUser?.role==='admin'){await loadUsers();await loadTelephonySettings();await loadTrunkSettings()}
   await autoProvisionWebPhone();
   $('#api-value').textContent='Online';
   $('#asterisk-value').textContent=status.status==='online'?'Online':'Offline';
@@ -640,6 +640,16 @@ $('#setup-complete').onclick=async()=>{
   }catch(error){note(error.message)}
   finally{button.disabled=false}
 };
+async function loadTrunkSettings(){
+  const panel=$('#trunk-settings');
+  if(!panel || panel.hidden)return;
+  try{const state=await api('/trunk');$('#trunk-state').textContent=state.configured?'Configured · disabled · secret '+(state.secret_configured?'stored':'missing'):'Not configured · external calls disabled';
+    if(state.configured){$('#trunk-host').value=state.host||'';$('#trunk-username').value=state.username||'';$('#trunk-port').value=state.port||5060;$('#trunk-transport').value=state.transport||'udp';$('#trunk-caller-id').value=state.outbound_caller_id||'';$('#trunk-password').required=true;$('#trunk-password').placeholder='Enter provider password (never displayed again)';}
+  }catch(error){$('#trunk-state').textContent='Trunk status unavailable: '+error.message}
+}
+$('#trunk-settings-form').onsubmit=async event=>{event.preventDefault();const password=$('#trunk-password').value;if(!password){note('Enter a provider password to save or use password rotation.');return}const button=$('#trunk-settings-form button');button.disabled=true;try{await api('/trunk',{method:'PUT',body:JSON.stringify({host:$('#trunk-host').value.trim(),username:$('#trunk-username').value.trim(),password,port:Number($('#trunk-port').value),transport:$('#trunk-transport').value,outbound_caller_id:$('#trunk-caller-id').value.trim()})});$('#trunk-password').value='';await loadTrunkSettings();note('Trunk credentials saved securely. External calling remains disabled.')}catch(error){note(error.message)}finally{button.disabled=false}};
+$('#trunk-rotate').onclick=async()=>{const password=prompt('Enter the new SIP provider password. It will not be shown again.');if(password===null)return;if(!password){note('A new password is required.');return}try{await api('/trunk/rotate',{method:'POST',body:JSON.stringify({password})});$('#trunk-password').value='';await loadTrunkSettings();note('Provider password rotated. Trunk remains disabled.')}catch(error){note(error.message)}};
+$('#trunk-disable').onclick=async()=>{if(!confirm('Disable the SIP trunk?'))return;try{await api('/trunk/disable',{method:'POST'});await loadTrunkSettings();note('SIP trunk disabled.')}catch(error){note(error.message)}};
 $('#telephony-settings-form').onsubmit=async event=>{
   event.preventDefault();
   const button=$('#telephony-settings-form button');button.disabled=true;

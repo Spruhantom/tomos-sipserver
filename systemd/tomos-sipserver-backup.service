@@ -1,0 +1,13 @@
+[Unit]
+Description=Create a verified TomOS SIP Server recovery backup
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/bin/python3 /opt/tomos-sipserver/app/scripts/tomos-sipserver-backup create
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

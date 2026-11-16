@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""Create and verify restricted TomOS SIP Server recovery archives.
+
+Archives contain SQLite-consistent application/CDR snapshots and allow-listed
+configuration files. They are deliberately root-only, not encrypted; copy them
+only to encrypted/off-site storage.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import shutil
+import sqlite3
+import sys
+import tarfile
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path, PurePosixPath
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+DEFAULT_DEST = Path("/var/backups/tomos-sipserver")
+FILES = {
+    "extensions.db": Path("/var/lib/tomos-sipserver/extensions.db"),
+    "api.env": Path("/etc/tomos-sipserver/api.env"),
+    "trunk.json": Path("/etc/tomos-sipserver/trunk.json"),
+    "pjsip.conf": Path("/etc/asterisk/pjsip.conf"),
+    "extensions.conf": Path("/etc/asterisk/extensions.conf"),
+    "http.conf": Path("/etc/asterisk/http.conf"),
+    "rtp.conf": Path("/etc/asterisk/rtp.conf"),
+    "sccp.conf": Path("/etc/asterisk/sccp.conf"),
+    "tomos-sccp-devices.conf": Path("/etc/asterisk/tomos-sccp-devices.conf"),
+}
+CDR_DB = Path("/var/lib/tomos-sipserver/cdr/cdr.db")
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def sqlite_snapshot(source: Path, destination: Path) -> None:
+    source_db = sqlite3.connect(f"file:{source}?mode=ro", uri=True, timeout=15)
+    target_db = sqlite3.connect(destination)
+    try:
+        source_db.backup(target_db)
+        target_db.execute("PRAGMA integrity_check")
+        result = target_db.execute("PRAGMA integrity_check").fetchone()
+        if not result or result[0] != "ok":
+            raise RuntimeError(f"SQLite integrity check failed for {source}")
+    finally:
+        target_db.close()
+        source_db.close()
+    os.chmod(destination, 0o600)
+
+
+def build_archive(destination: Path) -> Path:
+    if os.geteuid() != 0:
+        raise PermissionError("Run backup as root")
+    destination.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(destination, 0o700)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    archive = destination / f"tomos-sipserver-{stamp}.tar.gz"
+    with tempfile.TemporaryDirectory(prefix="tomos-sip-backup-") as temporary:
+        root = Path(temporary)
+        payload = root / "payload"
+        payload.mkdir(mode=0o700)
+        included = []
+        for name, source in FILES.items():
+            if not source.is_file():
+                continue
+            target = payload / name
+            if name == "extensions.db":
+                sqlite_snapshot(source, target)
+            else:
+                shutil.copyfile(source, target)
+                os.chmod(target, 0o600)
+            included.append({"name": name, "sha256": sha256(target), "size": target.stat().st_size})
+        if CDR_DB.is_file():
+            target = payload / "cdr.db"
+            sqlite_snapshot(CDR_DB, target)
+            included.append({"name": "cdr.db", "sha256": sha256(target), "size": target.stat().st_size})
+        if not included:
+            raise RuntimeError("No TomOS data or configuration files were found")
+        manifest = {
+            "format": 1,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "files": included,
+            "note": "Contains credentials and call metadata. Archive is not encrypted.",
+        }
+        (root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        os.chmod(root / "manifest.json", 0o600)
+        temporary_archive = archive.with_suffix(".tmp")
+        with tarfile.open(temporary_archive, "w:gz") as bundle:
+            bundle.add(root / "manifest.json", arcname="manifest.json")
+            bundle.add(payload, arcname="payload")
+        os.chmod(temporary_archive, 0o600)
+        os.replace(temporary_archive, archive)
+    return archive
+
+
+def verify_archive(archive: Path) -> dict:
+    if not archive.is_file() or archive.is_symlink():
+        raise ValueError("Backup archive must be a regular file")
+    with tarfile.open(archive, "r:gz") as bundle:
+        members = bundle.getmembers()
+        if len(members) > len(FILES) + 3:
+            raise ValueError("Backup archive contains too many members")
+        by_name = {}
+        allowed_payload = set(FILES) | {"cdr.db"}
+        for member in members:
+            name = member.name
+            if chr(92) in name:
+                raise ValueError("Backup archive contains an unsafe path")
+            path = PurePosixPath(name)
+            if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
+                raise ValueError("Backup archive contains an unsafe path")
+            if name in by_name:
+                raise ValueError("Backup archive contains duplicate paths")
+            if name not in {"manifest.json", "payload"} and not (
+                name.startswith("payload/") and name[8:] in allowed_payload
+            ):
+                raise ValueError("Archive contains an unexpected path")
+            if name == "payload":
+                if not member.isdir():
+                    raise ValueError("Backup payload directory is invalid")
+            elif not member.isfile():
+                raise ValueError("Backup archive contains a non-regular member")
+            if member.size > 1024 * 1024 * 1024:
+                raise ValueError("Backup archive member exceeds the size limit")
+            by_name[name] = member
+
+        manifest_member = by_name.get("manifest.json")
+        if manifest_member is None:
+            raise ValueError("Backup manifest is missing")
+        manifest = json.load(bundle.extractfile(manifest_member))
+        if manifest.get("format") != 1 or not isinstance(manifest.get("files"), list):
+            raise ValueError("Unsupported backup format")
+        declared = set()
+        for entry in manifest["files"]:
+            if not isinstance(entry, dict):
+                raise ValueError("Invalid backup manifest entry")
+            name = entry.get("name")
+            if name not in allowed_payload or name in declared:
+                raise ValueError("Backup contains an unexpected or duplicate filename")
+            declared.add(name)
+            member = by_name.get(f"payload/{name}")
+            if member is None:
+                raise ValueError(f"Backup payload missing: {name}")
+            stream = bundle.extractfile(member)
+            digest = hashlib.sha256()
+            size = 0
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+                size += len(chunk)
+            if digest.hexdigest() != entry.get("sha256") or size != entry.get("size"):
+                raise ValueError(f"Checksum mismatch: {name}")
+        actual_payload = {name[8:] for name in by_name if name.startswith("payload/")}
+        if actual_payload != declared:
+            raise ValueError("Backup contains undeclared payload files")
+        return manifest
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+    create = sub.add_parser("create", help="create a root-only backup archive")
+    create.add_argument("--destination", type=Path, default=DEFAULT_DEST)
+    verify = sub.add_parser("verify", help="verify archive paths and SHA-256 checksums")
+    verify.add_argument("archive", type=Path)
+    restore = sub.add_parser("restore", help="restore a verified archive with rollback protection")
+    restore.add_argument("archive", type=Path)
+    restore.add_argument("--yes", action="store_true", help="confirm destructive restore")
+    args = parser.parse_args()
+    try:
+        if args.command == "create":
+            result = build_archive(args.destination)
+            manifest = verify_archive(result)
+            print(f"Backup created and verified: {result}")
+            print(f"Files included: {len(manifest['files'])}")
+        elif args.command == "verify":
+            manifest = verify_archive(args.archive)
+            print(f"Backup verified: {args.archive}")
+            print(f"Created: {manifest.get('created_at', 'unknown')}")
+            print(f"Files: {len(manifest['files'])}")
+        else:
+            if not args.yes:
+                raise ValueError("restore requires explicit --yes confirmation")
+            from tomos_sipserver.restore import restore_archive
+            result = restore_archive(args.archive)
+            print("Restore completed and verified: " + ", ".join(result["restored"]))
+        return 0
+    except (OSError, ValueError, RuntimeError, sqlite3.Error, tarfile.TarError) as error:
+        print(f"TomOS backup error: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
