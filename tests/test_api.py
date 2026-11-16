@@ -177,6 +177,22 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/v1/extensions/999/provisioning", headers=self.headers).status_code, 404)
         self.assertEqual(self.client.get("/api/v1/extensions/12/provisioning", headers=self.headers).status_code, 422)
 
+    def test_extension_protocol_is_explicit_and_sccp_does_not_return_sip_secret(self):
+        sip = self.client.post("/api/v1/extensions", headers=self.headers,
+                               json={"extension": "140", "display_name": "SIP phone"})
+        self.assertEqual(sip.status_code, 201)
+        self.assertEqual(sip.json()["protocol"], "sip")
+        self.assertIn("sip_password", sip.json())
+        sccp = self.client.post("/api/v1/extensions", headers=self.headers,
+                                json={"extension": "141", "display_name": "Cisco phone", "protocol": "sccp"})
+        self.assertEqual(sccp.status_code, 201, sccp.text)
+        self.assertEqual(sccp.json()["protocol"], "sccp")
+        self.assertNotIn("sip_password", sccp.json())
+        listed = {item["extension"]: item for item in self.client.get("/api/v1/extensions", headers=self.headers).json()}
+        self.assertEqual(listed["140"]["protocol"], "sip")
+        self.assertEqual(listed["141"]["protocol"], "sccp")
+        self.assertEqual(self.client.get("/api/v1/extensions/141/provisioning", headers=self.headers).status_code, 409)
+
     def test_duplicate_extension_is_rejected(self):
         payload = {"extension": "121", "display_name": "Desk"}
         self.assertEqual(self.client.post("/api/v1/extensions", headers=self.headers, json=payload).status_code, 201)
