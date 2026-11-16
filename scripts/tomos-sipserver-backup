@@ -170,6 +170,9 @@ def main() -> int:
     create.add_argument("--destination", type=Path, default=DEFAULT_DEST)
     verify = sub.add_parser("verify", help="verify archive paths and SHA-256 checksums")
     verify.add_argument("archive", type=Path)
+    restore = sub.add_parser("restore", help="restore a verified archive with rollback protection")
+    restore.add_argument("archive", type=Path)
+    restore.add_argument("--yes", action="store_true", help="confirm destructive restore")
     args = parser.parse_args()
     try:
         if args.command == "create":
@@ -177,11 +180,17 @@ def main() -> int:
             manifest = verify_archive(result)
             print(f"Backup created and verified: {result}")
             print(f"Files included: {len(manifest['files'])}")
-        else:
+        elif args.command == "verify":
             manifest = verify_archive(args.archive)
             print(f"Backup verified: {args.archive}")
             print(f"Created: {manifest.get('created_at', 'unknown')}")
             print(f"Files: {len(manifest['files'])}")
+        else:
+            if not args.yes:
+                raise ValueError("restore requires explicit --yes confirmation")
+            from tomos_sipserver.restore import restore_archive
+            result = restore_archive(args.archive)
+            print("Restore completed and verified: " + ", ".join(result["restored"]))
         return 0
     except (OSError, ValueError, RuntimeError, sqlite3.Error, tarfile.TarError) as error:
         print(f"TomOS backup error: {error}", file=sys.stderr)
