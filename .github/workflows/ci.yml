@@ -117,13 +117,11 @@ jobs:
           if config.count(marker) != 1:
               raise SystemExit("expected exactly one generated [tomos-internal] context")
           start = config.index(marker) + len(marker)
-          next_context = config.find("\n[", start)
-          if next_context < 0:
-              raise SystemExit("could not locate the next dialplan context")
-          # Insert the answered-call fixture before the next context header,
-          # keeping it inside [tomos-internal] even when country contexts exist.
+          # Insert directly after the [tomos-internal] header. This avoids
+          # relying on context-boundary detection when the generated UK
+          # country profile adds another context later in the file.
           fixture = "\nexten => 900,1,Set(CALLERID(num)=100)\n same => n,Answer()\n same => n,Wait(1)\n same => n,Hangup()\n"
-          config = config[:next_context] + fixture + config[next_context:]
+          config = config[:start] + fixture + config[start:]
           path.write_text(config, encoding="utf-8")
           PY
           chown root:asterisk /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
@@ -179,6 +177,8 @@ jobs:
           grep -Fq 'cdr_sqlite3_custom.so' <<<"$(asterisk -rx 'module show like cdr_sqlite3_custom')"
           test -f /var/lib/tomos-sipserver/cdr/cdr.db
           asterisk -rx 'dialplan reload'
+          TEST_EXTENSION="$(asterisk -rx 'dialplan show 900@tomos-internal')"
+          grep -Fq '900@tomos-internal' <<<"$TEST_EXTENSION"
           asterisk -rx 'channel originate Local/900@tomos-internal application Wait 1'
           CDR_READY=0
           for attempt in $(seq 1 15); do
