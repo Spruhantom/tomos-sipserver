@@ -81,9 +81,13 @@ def initialize_database(path: str | Path = DEFAULT_DB) -> None:
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 completed INTEGER NOT NULL DEFAULT 1 CHECK (completed IN (0, 1)),
                 completed_at TEXT,
-                completed_by TEXT
+                completed_by TEXT,
+                country_code TEXT NOT NULL DEFAULT 'GB' CHECK (country_code IN ('GB', 'INTL'))
             )
         """)
+        setup_columns = {row["name"] for row in connection.execute("PRAGMA table_info(setup_state)")}
+        if "country_code" not in setup_columns:
+            connection.execute("ALTER TABLE setup_state ADD COLUMN country_code TEXT NOT NULL DEFAULT 'GB'")
         # Existing installations are considered configured. A genuinely fresh
         # database is marked pending by create_app before its first admin is added.
         connection.execute(
