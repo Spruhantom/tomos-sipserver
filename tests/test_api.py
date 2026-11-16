@@ -30,6 +30,20 @@ class ExtensionApiTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def test_first_run_setup_is_pending_until_admin_completes_it(self):
+        self.assertEqual(self.client.get("/api/v1/setup/status").status_code, 401)
+        pending = self.client.get("/api/v1/setup/status", headers=self.headers)
+        self.assertEqual(pending.status_code, 200)
+        self.assertFalse(pending.json()["completed"])
+        self.assertEqual(pending.json()["extensions_count"], 0)
+        self.assertEqual(self.client.post("/api/v1/setup/complete").status_code, 401)
+        completed = self.client.post("/api/v1/setup/complete", headers=self.headers)
+        self.assertEqual(completed.status_code, 200)
+        self.assertTrue(completed.json()["completed"])
+        status = self.client.get("/api/v1/setup/status", headers=self.headers)
+        self.assertTrue(status.json()["completed"])
+        self.assertEqual(status.json()["completed_by"], "api-token")
+
     def test_health_is_public(self):
         response = self.client.get("/health")
         self.assertEqual(response.status_code, 200)
