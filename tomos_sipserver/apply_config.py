@@ -14,6 +14,8 @@ from .cisco import render_phone_xml, render_sccp_config
 
 APP_DIR = Path(__file__).resolve().parent.parent
 RENDERER_PATH = APP_DIR / "render-config.py"
+if not RENDERER_PATH.is_file():
+    RENDERER_PATH = APP_DIR / "scripts" / "render-config.py"
 DB_PATH = Path("/var/lib/tomos-sipserver/extensions.db")
 CONFIG_DIR = Path("/etc/asterisk")
 SCCP_CONFIG_PATH = CONFIG_DIR / "tomos-sccp-devices.conf"
@@ -41,14 +43,23 @@ def apply(reload_asterisk: bool = True) -> None:
         raise PermissionError("Configuration helper must run as root")
     with closing(sqlite3.connect(DB_PATH)) as connection:
         rows = connection.execute(
-            "SELECT extension, password FROM extensions WHERE enabled = 1 AND protocol = 'sip' ORDER BY extension"
+            "SELECT extension, password, webrtc_password FROM extensions WHERE enabled = 1 AND protocol = 'sip' ORDER BY extension"
         ).fetchall()
         cisco_rows = connection.execute(
             """SELECT d.mac, d.model, d.server_host, e.extension, e.display_name
                FROM cisco_devices d JOIN extensions e ON e.extension = d.extension
                WHERE e.enabled = 1 ORDER BY d.mac"""
         ).fetchall()
-    extensions = [(str(number), str(password)) for number, password in rows]
+        try:
+            settings_row = connection.execute(
+                "SELECT country_code FROM setup_state WHERE id = 1"
+            ).fetchone()
+            country_code = str(settings_row[0]) if settings_row and settings_row[0] in {"GB", "INTL"} else "GB"
+        except sqlite3.OperationalError:
+            country_code = "GB"
+    extensions = [(str(row[0]), str(row[1])) for row in rows]
+    webrtc_extensions = [(str(row[0]), str(row[2])) for row in rows if row[2]]
+    webrtc_numbers = [number for number, _ in webrtc_extensions]
     sccp_extensions = sorted({str(row[3]) for row in cisco_rows})
     cisco_configs = {
         str(mac): (
@@ -74,8 +85,8 @@ def apply(reload_asterisk: bool = True) -> None:
         for path in TFTP_DIR.glob("SEP*.cnf.xml") if path.is_file()
     }
     try:
-        renderer.atomic_write(paths[0], renderer.render_pjsip(extensions))
-        renderer.atomic_write(paths[1], renderer.render_dialplan(extensions, sccp_extensions))
+        renderer.atomic_write(paths[0], renderer.render_pjsip(extensions, webrtc_extensions))
+        renderer.atomic_write(paths[1], renderer.render_dialplan(extensions, sccp_extensions, webrtc_numbers, country_code=country_code))
         renderer.atomic_write(paths[2], "".join(config for config, _ in cisco_configs.values()))
         for path in paths:
             os.chown(path, 0, asterisk_gid)

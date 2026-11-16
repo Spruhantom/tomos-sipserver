@@ -39,7 +39,43 @@ class RenderConfigTests(unittest.TestCase):
         self.assertIn("password=" + "a" * 24, pjsip)
         self.assertIn("exten => 100,1", dialplan)
         self.assertIn("Dial(PJSIP/101,30)", dialplan)
-        self.assertIn("Dial(PJSIP/${EXTEN},30)", dialplan)
+
+    def test_generates_dedicated_dtls_srtp_webrtc_endpoint(self):
+        pjsip = render_config.render_pjsip(
+            [("100", "a" * 24)], [("100", "b" * 24)]
+        )
+        self.assertIn("[transport-wss]", pjsip)
+        self.assertIn("protocol=wss", pjsip)
+        self.assertIn("[webrtc-100]", pjsip)
+        self.assertIn("username=100-web", pjsip)
+        self.assertIn("identify_by=auth_username", pjsip)
+        self.assertIn("media_encryption=dtls", pjsip)
+        self.assertIn("dtls_auto_generate_cert=yes", pjsip)
+        self.assertIn("ice_support=yes", pjsip)
+        self.assertIn("rtcp_mux=yes", pjsip)
+
+    def test_generates_uk_numbering_profile_without_enabling_external_calls(self):
+        dialplan = render_config.render_dialplan([("100", "a" * 24)])
+        self.assertIn("include => tomos-country-outbound", dialplan)
+        self.assertIn("exten => _0[1-9]X.,1", dialplan)
+        self.assertIn("Set(TOMOS_E164=+44${EXTEN:1})", dialplan)
+        self.assertIn("exten => _00X.,1", dialplan)
+        self.assertIn("Set(TOMOS_E164=+${EXTEN:2})", dialplan)
+        self.assertIn("exten => 999,1", dialplan)
+        self.assertIn("exten => 112,1", dialplan)
+        self.assertIn("Outbound calls are deliberately blocked", dialplan)
+        self.assertNotIn("Dial(PJSIP/${EXTEN}", dialplan)
+
+    def test_international_manual_profile_does_not_add_uk_rules(self):
+        dialplan = render_config.render_dialplan([("100", "a" * 24)], country_code="INTL")
+        self.assertNotIn("tomos-country-outbound", dialplan)
+        self.assertNotIn("+44${EXTEN:1}", dialplan)
+
+    def test_routes_inbound_calls_to_desk_and_browser_clients(self):
+        dialplan = render_config.render_dialplan(
+            [("100", "a" * 24)], webrtc_extensions=["100"]
+        )
+        self.assertIn("Dial(PJSIP/100&PJSIP/webrtc-100,30)", dialplan)
 
     def test_routes_sccp_extensions_to_chan_sccp(self):
         dialplan = render_config.render_dialplan([("100", "a" * 24)], ["200"])

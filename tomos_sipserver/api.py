@@ -52,10 +52,15 @@ class UserCreate(BaseModel):
     password: str = Field(min_length=12, max_length=128)
     role: str = Field(default="operator", pattern=r"^(admin|operator|viewer)$")
 
+class TelephonySettingsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    country_code: str = Field(default="GB", pattern=r"^(GB|INTL)$")
+
 class UserUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     role: str | None = Field(default=None, pattern=r"^(admin|operator|viewer)$")
     enabled: bool | None = None
+    assigned_extension: str | None = Field(default=None, pattern=EXTENSION_PATTERN)
 
 class PasswordChange(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -304,7 +309,7 @@ def create_app(
                 if not header or not cookie or not hmac.compare_digest(header, csrf) or not hmac.compare_digest(cookie, csrf):
                     return None
             with connect(db_path) as connection:
-                row = connection.execute("SELECT id, username, role, enabled FROM admin_users WHERE id = ?", (int(user_id_text),)).fetchone()
+                row = connection.execute("SELECT id, username, role, enabled, assigned_extension FROM admin_users WHERE id = ?", (int(user_id_text),)).fetchone()
             if row is None or not row["enabled"]:
                 return None
             return {"id": row["id"], "username": row["username"], "role": row["role"]}
@@ -397,7 +402,7 @@ def create_app(
     def setup_status(principal: dict = Depends(require_token)):
         with connect(db_path) as connection:
             state = connection.execute(
-                "SELECT completed, completed_at, completed_by FROM setup_state WHERE id = 1"
+                "SELECT completed, completed_at, completed_by, country_code FROM setup_state WHERE id = 1"
             ).fetchone()
             extensions = connection.execute("SELECT COUNT(*) FROM extensions").fetchone()[0]
             devices = sum(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
@@ -408,24 +413,44 @@ def create_app(
             "completed_by": state["completed_by"],
             "extensions_count": extensions,
             "devices_count": devices,
+            "country_code": state["country_code"],
             "asterisk": get_status().get("status", "unknown"),
         }
 
-    @app.post("/api/v1/setup/complete", tags=["setup"])
-    def complete_setup(principal: dict = Depends(require_admin)):
-        completed_at = _utc_now()
+    @app.get("/api/v1/settings/telephony", tags=["settings"])
+    def get_telephony_settings(principal: dict = Depends(require_admin)):
         with connect(db_path) as connection:
+            row = connection.execute("SELECT country_code FROM setup_state WHERE id = 1").fetchone()
+        return {"country_code": row["country_code"], "available_profiles": [
+            {"code": "GB", "name": "United Kingdom"},
+            {"code": "INTL", "name": "International / manual"},
+        ]}
+
+    @app.put("/api/v1/settings/telephony", tags=["settings"])
+    def update_telephony_settings(payload: TelephonySettingsUpdate, principal: dict = Depends(require_admin)):
+        def operation(connection):
+            connection.execute("UPDATE setup_state SET country_code = ? WHERE id = 1", (payload.country_code,))
+            return {"country_code": payload.country_code}
+        return mutate(operation)
+
+    @app.post("/api/v1/setup/complete", tags=["setup"])
+    def complete_setup(payload: TelephonySettingsUpdate | None = None,
+                       principal: dict = Depends(require_admin)):
+        completed_at = _utc_now()
+        country_code = payload.country_code if payload else "GB"
+        def operation(connection):
             connection.execute(
-                "UPDATE setup_state SET completed = 1, completed_at = ?, completed_by = ? WHERE id = 1",
-                (completed_at, principal["username"]),
+                "UPDATE setup_state SET country_code = ?, completed = 1, completed_at = ?, completed_by = ? WHERE id = 1",
+                (country_code, completed_at, principal["username"]),
             )
-        return {"completed": True, "completed_at": completed_at}
+            return {"completed": True, "completed_at": completed_at, "country_code": country_code}
+        return mutate(operation)
 
     @app.get("/api/v1/users", tags=["user management"])
     def list_users(principal: dict = Depends(require_admin)):
         with connect(db_path) as connection:
-            rows = connection.execute("SELECT id, username, role, enabled, created_at, updated_at FROM admin_users ORDER BY username COLLATE NOCASE").fetchall()
-        return [{"id": row["id"], "username": row["username"], "role": row["role"], "enabled": bool(row["enabled"]), "created_at": row["created_at"], "updated_at": row["updated_at"]} for row in rows]
+            rows = connection.execute("SELECT id, username, role, enabled, assigned_extension, created_at, updated_at FROM admin_users ORDER BY username COLLATE NOCASE").fetchall()
+        return [{"id": row["id"], "username": row["username"], "role": row["role"], "enabled": bool(row["enabled"]), "assigned_extension": row["assigned_extension"], "created_at": row["created_at"], "updated_at": row["updated_at"]} for row in rows]
 
     @app.post("/api/v1/users", status_code=status.HTTP_201_CREATED, tags=["user management"])
     def create_user(payload: UserCreate, principal: dict = Depends(require_admin)):
@@ -443,10 +468,10 @@ def create_app(
     @app.patch("/api/v1/users/{user_id}", tags=["user management"])
     def update_user(user_id: int, payload: UserUpdate, principal: dict = Depends(require_admin)):
         changes = payload.model_dump(exclude_unset=True)
-        if not changes or any(value is None for value in changes.values()):
-            raise HTTPException(status_code=422, detail="Provide a non-null role or enabled value")
+        if not changes or any(value is None for key, value in changes.items() if key != "assigned_extension"):
+            raise HTTPException(status_code=422, detail="Provide a role, enabled state or assigned extension")
         with connect(db_path) as connection:
-            target = connection.execute("SELECT id, username, role, enabled FROM admin_users WHERE id = ?", (user_id,)).fetchone()
+            target = connection.execute("SELECT id, username, role, enabled, assigned_extension FROM admin_users WHERE id = ?", (user_id,)).fetchone()
             if target is None:
                 raise HTTPException(status_code=404, detail="User not found")
             next_role = changes.get("role", target["role"])
@@ -455,7 +480,28 @@ def create_app(
                 remaining = connection.execute("SELECT COUNT(*) FROM admin_users WHERE role = ? AND enabled = 1 AND id != ?", ("admin", user_id)).fetchone()[0]
                 if remaining == 0:
                     raise HTTPException(status_code=409, detail="Cannot disable or demote the last active administrator")
-            connection.execute("UPDATE admin_users SET role = ?, enabled = ?, updated_at = ? WHERE id = ?", (next_role, int(next_enabled), _utc_now(), user_id))
+            next_extension = changes.get("assigned_extension", target["assigned_extension"])
+            if next_extension is not None and next_role == "viewer":
+                raise HTTPException(status_code=409, detail="Read-only viewer accounts cannot be assigned a browser phone")
+            if next_extension is not None:
+                extension_row = connection.execute(
+                    "SELECT protocol, enabled FROM extensions WHERE extension = ?", (next_extension,)
+                ).fetchone()
+                if extension_row is None or extension_row["protocol"] != "sip" or not extension_row["enabled"]:
+                    raise HTTPException(status_code=409, detail="Only an enabled SIP/PJSIP extension can be assigned to a user")
+                assigned_elsewhere = connection.execute(
+                    "SELECT username FROM admin_users WHERE assigned_extension = ? AND id != ?",
+                    (next_extension, user_id),
+                ).fetchone()
+                if assigned_elsewhere:
+                    raise HTTPException(status_code=409, detail="This extension is already assigned to another user")
+            connection.execute(
+                "UPDATE admin_users SET role = ?, enabled = ?, assigned_extension = ?, updated_at = ? WHERE id = ?",
+                (next_role, int(next_enabled), next_extension, _utc_now(), user_id),
+            )
+            if next_extension != target["assigned_extension"]:
+                _record_audit(connection, principal, "user.extension_assigned", user_id, target["username"],
+                              {"from": target["assigned_extension"], "to": next_extension})
             if next_role != target["role"]:
                 _record_audit(connection, principal, "user.role_changed", user_id, target["username"],
                               {"from": target["role"], "to": next_role})
@@ -463,8 +509,8 @@ def create_app(
                 _record_audit(connection, principal, "user.enabled" if next_enabled else "user.disabled",
                               user_id, target["username"],
                               {"from": bool(target["enabled"]), "to": bool(next_enabled)})
-            row = connection.execute("SELECT id, username, role, enabled FROM admin_users WHERE id = ?", (user_id,)).fetchone()
-        return {"id": row["id"], "username": row["username"], "role": row["role"], "enabled": bool(row["enabled"])}
+            row = connection.execute("SELECT id, username, role, enabled, assigned_extension FROM admin_users WHERE id = ?", (user_id,)).fetchone()
+        return {"id": row["id"], "username": row["username"], "role": row["role"], "enabled": bool(row["enabled"]), "assigned_extension": row["assigned_extension"]}
 
     @app.delete("/api/v1/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["user management"])
     def delete_user(user_id: int, principal: dict = Depends(require_admin)):
@@ -754,12 +800,13 @@ def create_app(
         if payload.protocol == "sccp" and not re.fullmatch(r"^[A-Za-z0-9][A-Za-z0-9 ._()\-]{0,63}$", display_name):
             raise HTTPException(status_code=422, detail="SCCP display names must use letters, numbers, spaces, dots, underscores, parentheses or hyphens")
         password = payload.password or secrets.token_urlsafe(32)
+        webrtc_password = secrets.token_urlsafe(32) if payload.protocol == "sip" else None
         now = _utc_now()
         def operation(connection):
             try:
                 connection.execute(
-                    "INSERT INTO extensions(extension, display_name, password, protocol, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)",
-                    (payload.extension, display_name, password, payload.protocol, now, now),
+                    "INSERT INTO extensions(extension, display_name, password, webrtc_password, protocol, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
+                    (payload.extension, display_name, password, webrtc_password, payload.protocol, now, now),
                 )
             except sqlite3.IntegrityError as error:
                 raise HTTPException(status_code=409, detail="Extension already exists") from error
@@ -1175,6 +1222,76 @@ def create_app(
             "password_included": False,
         }
 
+    @app.get("/api/v1/me/webphone", tags=["WebRTC"])
+    def my_webphone(request: Request, principal: dict = Depends(require_token)):
+        """Return only the browser phone assigned to the authenticated dashboard user."""
+        if principal.get("id") is None:
+            raise HTTPException(status_code=403, detail="A personal dashboard login is required")
+        with connect(db_path) as connection:
+            row = connection.execute(
+                """SELECT u.assigned_extension, u.enabled AS user_enabled,
+                          e.protocol, e.enabled AS extension_enabled
+                   FROM admin_users u LEFT JOIN extensions e ON e.extension = u.assigned_extension
+                   WHERE u.id = ?""", (principal["id"],)
+            ).fetchone()
+        if row is None or not row["user_enabled"]:
+            raise HTTPException(status_code=401, detail="Dashboard account is unavailable")
+        if not row["assigned_extension"] or row["protocol"] != "sip" or not row["extension_enabled"]:
+            payload = {"assigned": False, "extension": None}
+        else:
+            config = extension_webrtc_config(row["assigned_extension"], request, principal)
+            payload = {"assigned": True, "extension": row["assigned_extension"], "phone": json.loads(config.body)}
+        return Response(content=json.dumps(payload), media_type="application/json",
+                        headers={"Cache-Control": "no-store, private", "Pragma": "no-cache",
+                                 "X-Content-Type-Options": "nosniff"})
+
+    @app.get("/api/v1/extensions/{extension}/webrtc", tags=["WebRTC"])
+    def extension_webrtc_config(extension: str, request: Request,
+                                 principal: dict = Depends(require_token)):
+        """Return the dedicated browser SIP identity to a signed-in non-viewer."""
+        if principal["role"] == "viewer":
+            raise HTTPException(status_code=403, detail="Browser calling requires operator or administrator access")
+        if principal.get("id") is not None and principal["role"] != "admin":
+            with connect(db_path) as connection:
+                owner = connection.execute(
+                    "SELECT assigned_extension FROM admin_users WHERE id = ?", (principal["id"],)
+                ).fetchone()
+            if owner is None or owner["assigned_extension"] != extension:
+                raise HTTPException(status_code=403, detail="You can only use the browser phone assigned to your account")
+        if not re.fullmatch(EXTENSION_PATTERN, extension):
+            raise HTTPException(status_code=422, detail="Invalid extension number")
+        with connect(db_path) as connection:
+            row = connection.execute(
+                "SELECT extension, display_name, enabled, protocol, webrtc_password FROM extensions WHERE extension = ?",
+                (extension,),
+            ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Extension not found")
+        if row["protocol"] != "sip":
+            raise HTTPException(status_code=409, detail="Browser calling is available for SIP/PJSIP extensions only")
+        if not row["enabled"] or not row["webrtc_password"]:
+            raise HTTPException(status_code=409, detail="Enable the SIP extension before using browser calling")
+        host = request.url.hostname or "localhost"
+        sip_domain = os.environ.get("TOMOS_SIP_DOMAIN", host).strip()
+        websocket_url = os.environ.get("TOMOS_WSS_URL", f"wss://{host}:8089/ws").strip()
+        if not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", sip_domain):
+            raise HTTPException(status_code=503, detail="TOMOS_SIP_DOMAIN is not a valid DNS name")
+        if not re.fullmatch(r"wss://[A-Za-z0-9.-]+(?::[0-9]{1,5})?/ws", websocket_url):
+            raise HTTPException(status_code=503, detail="TOMOS_WSS_URL must be a secure wss:// host[:port]/ws URL")
+        payload = {
+            "extension": row["extension"],
+            "display_name": row["display_name"],
+            "websocket_url": websocket_url,
+            "sip_uri": f"sip:webrtc-aor-{extension}@{sip_domain}",
+            "authorization_username": f"{extension}-web",
+            "authorization_password": row["webrtc_password"],
+            "secure_media": True,
+            "media_encryption": "DTLS-SRTP",
+        }
+        return Response(content=json.dumps(payload), media_type="application/json",
+                        headers={"Cache-Control": "no-store, private", "Pragma": "no-cache",
+                                 "X-Content-Type-Options": "nosniff"})
+
     @app.patch("/api/v1/extensions/{extension}", dependencies=[Depends(require_token)])
     def update_extension(extension: str, payload: ExtensionUpdate):
         if not re.fullmatch(EXTENSION_PATTERN, extension):
@@ -1207,6 +1324,8 @@ def create_app(
         if not re.fullmatch(EXTENSION_PATTERN, extension):
             raise HTTPException(status_code=422, detail="Invalid extension number")
         def operation(connection):
+            connection.execute("UPDATE admin_users SET assigned_extension = NULL, updated_at = ? WHERE assigned_extension = ?",
+                               (_utc_now(), extension))
             cursor = connection.execute("DELETE FROM extensions WHERE extension = ?", (extension,))
             if cursor.rowcount == 0:
                 raise HTTPException(status_code=404, detail="Extension not found")
@@ -1223,7 +1342,7 @@ def create_app(
                 raise HTTPException(status_code=404, detail="Extension not found")
             if row["protocol"] != "sip":
                 raise HTTPException(status_code=409, detail="SCCP extensions do not use SIP passwords")
-            connection.execute("UPDATE extensions SET password = ?, updated_at = ? WHERE extension = ?", (password, _utc_now(), extension))
+            connection.execute("UPDATE extensions SET password = ?, webrtc_password = ?, updated_at = ? WHERE extension = ?", (password, secrets.token_urlsafe(32), _utc_now(), extension))
             return {"extension": extension, "sip_password": password}
         return mutate(operation)
 

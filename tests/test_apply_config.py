@@ -20,11 +20,13 @@ class ApplyConfigTests(unittest.TestCase):
         self.config.mkdir()
         self.renderer = Path(__file__).resolve().parents[1] / "scripts" / "render-config.py"
         with sqlite3.connect(self.db) as connection:
-            connection.execute("CREATE TABLE extensions (extension TEXT, password TEXT, enabled INTEGER, display_name TEXT, protocol TEXT NOT NULL DEFAULT 'sip')")
+            connection.execute("CREATE TABLE extensions (extension TEXT, password TEXT, webrtc_password TEXT, enabled INTEGER, display_name TEXT, protocol TEXT NOT NULL DEFAULT 'sip')")
             connection.executemany(
-                "INSERT INTO extensions VALUES (?, ?, ?, ?, ?)",
-                [("100", "a" * 32, 1, "Front Desk", "sccp"), ("101", "b" * 32, 0, "Disabled", "sip"), ("102", "c" * 32, 1, "Reception", "sccp"), ("103", "d" * 32, 1, "Legacy dual", "sip")],
+                "INSERT INTO extensions VALUES (?, ?, ?, ?, ?, ?)",
+                [("100", "a" * 32, None, 1, "Front Desk", "sccp"), ("101", "b" * 32, None, 0, "Disabled", "sip"), ("102", "c" * 32, None, 1, "Reception", "sccp"), ("103", "d" * 32, "w" * 32, 1, "Legacy dual", "sip")],
             )
+            connection.execute("CREATE TABLE setup_state (id INTEGER PRIMARY KEY, country_code TEXT NOT NULL DEFAULT 'GB')")
+            connection.execute("INSERT INTO setup_state VALUES (1, 'GB')")
             connection.execute(
                 """CREATE TABLE cisco_devices (
                     mac TEXT, extension TEXT, model TEXT, server_host TEXT, created_at TEXT
@@ -73,10 +75,12 @@ class ApplyConfigTests(unittest.TestCase):
         self.assertNotIn("[102]", pjsip)
         self.assertNotIn("[101]", pjsip)
         self.assertIn("[103]", pjsip)
+        self.assertIn("[webrtc-103]", pjsip)
+        self.assertIn("username=103-web", pjsip)
         self.assertIn("exten => 100,1", dialplan)
         self.assertIn("Dial(SCCP/100,30)", dialplan)
         self.assertIn("Dial(SCCP/102,30)", dialplan)
-        self.assertIn("Dial(PJSIP/103&SCCP/103,30)", dialplan)
+        self.assertIn("Dial(PJSIP/103&SCCP/103&PJSIP/webrtc-103,30)", dialplan)
         self.assertNotIn("exten => 101,1", dialplan)
         self.assertIn("[SEP001565AABBCC]", sccp)
         self.assertIn("[SEP001565AABBEE]", sccp)
@@ -93,6 +97,14 @@ class ApplyConfigTests(unittest.TestCase):
         self.assertEqual(modern_root.findtext("deviceProtocol"), "SCCP")
         self.assertEqual(modern_root.findtext("fullConfig"), "true")
         self.assertEqual((self.tftp / "SEP001565AABBCC.cnf.xml").stat().st_mode & 0o777, 0o644)
+
+    def test_applies_saved_international_manual_country_profile(self):
+        with sqlite3.connect(self.db) as connection:
+            connection.execute("UPDATE setup_state SET country_code = 'INTL' WHERE id = 1")
+        apply_config.apply(reload_asterisk=False)
+        dialplan = (self.config / "extensions.conf").read_text()
+        self.assertNotIn("[tomos-country-outbound]", dialplan)
+        self.assertIn("International/manual profile selected", dialplan)
 
     def test_removes_stale_managed_tftp_profiles(self):
         self.tftp.mkdir()

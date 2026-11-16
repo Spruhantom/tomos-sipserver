@@ -2,10 +2,17 @@ const $=s=>document.querySelector(s);
 let csrf='';
 let currentUser=null;
 let setupPromptChecked=false;
+let telephonySettingsLoaded=false;
 let resetUserId=null;
 let callFilters={};
 let callOffset=0;
 const callPageSize=50;
+let webPhoneUa=null;
+let webPhoneRegisterer=null;
+let webPhoneSession=null;
+let webPhoneSip=null;
+let webPhoneConfig=null;
+let autoPhoneAttempted=false;
 const api=async(path,opt={})=>{
   const h={'Content-Type':'application/json',...(opt.headers||{})};
   if(csrf&&opt.method&&opt.method!=='GET')h['X-Tomos-CSRF']=csrf;
@@ -14,17 +21,26 @@ const api=async(path,opt={})=>{
   if(!r.ok){let d={};try{d=await r.json()}catch{}throw Error(d.detail||'Request failed')}
   return r.status===204?null:r.json()
 };
-function showLogin(){$('#login').hidden=false;$('#app').hidden=true;$('#logout').hidden=true;$('#change-password').hidden=true;$('#current-user').textContent='';currentUser=null}
-function showApp(){$('#login').hidden=true;$('#app').hidden=false;$('#logout').hidden=false;$('#change-password').hidden=false;$('#current-user').textContent=currentUser?currentUser.username+' · '+currentUser.role:'';$('#app').classList.toggle('role-viewer',currentUser?.role==='viewer');$('#app').classList.toggle('role-operator',currentUser?.role==='operator');$('#user-management').hidden=currentUser?.role!=='admin';}
+function showLogin(){if(typeof webPhoneUa!=='undefined'&&webPhoneUa)disconnectWebPhone().catch(()=>{});telephonySettingsLoaded=false;$('#telephony-settings').hidden=true;$('#login').hidden=false;$('#app').hidden=true;$('#logout').hidden=true;$('#change-password').hidden=true;$('#current-user').textContent='';currentUser=null}
+function showApp(){$('#login').hidden=true;$('#app').hidden=false;$('#logout').hidden=false;$('#change-password').hidden=false;$('#current-user').textContent=currentUser?currentUser.username+' · '+currentUser.role:'';$('#app').classList.toggle('role-viewer',currentUser?.role==='viewer');$('#app').classList.toggle('role-operator',currentUser?.role==='operator');$('#user-management').hidden=currentUser?.role!=='admin';$('#telephony-settings').hidden=currentUser?.role!=='admin';}
 function note(s){const n=$('#notice');n.textContent=s;n.style.display='block';setTimeout(()=>n.style.display='none',3200)}
 async function checkFirstRunSetup(){
   if(setupPromptChecked||currentUser?.role!=='admin')return;
   const state=await api('/setup/status');
   setupPromptChecked=true;
+  $('#setup-country').value=state.country_code||'GB';
   if(state.completed)return;
   $('#setup-asterisk-state').textContent=state.asterisk==='online'?'Asterisk is online':'Asterisk needs attention';
   $('#setup-extension-count').textContent=state.extensions_count+' extension'+(state.extensions_count===1?'':'s')+' configured';
   $('#first-run-setup').hidden=false;
+}
+async function loadTelephonySettings(){
+  if(currentUser?.role!=='admin'||telephonySettingsLoaded)return;
+  const settings=await api('/settings/telephony');
+  $('#telephony-country').value=settings.country_code||'GB';
+  if($('#setup-country'))$('#setup-country').value=settings.country_code||'GB';
+  $('#telephony-settings').hidden=false;
+  telephonySettingsLoaded=true;
 }
 function cookie(n){return document.cookie.split('; ').find(x=>x.startsWith(n+'='))?.split('=').slice(1).join('=')||''}
 function secret(s){$('#secret-value').textContent=s;$('#secret-dialog').showModal()}
@@ -46,9 +62,26 @@ async function loadCalls(){
     $('#calls').append(tr)
   }
 }
+function updateWebPhoneExtensions(rows){
+  const select=$('#webphone-extension');
+  if(!select)return;
+  const selected=select.value;
+  select.replaceChildren();
+  const placeholder=document.createElement('option');
+  placeholder.value='';placeholder.textContent='Choose a SIP extension';select.append(placeholder);
+  for(const extension of rows.filter(item=>item.protocol==='sip'&&item.enabled)){
+    const option=document.createElement('option');
+    option.value=extension.extension;
+    option.textContent=extension.extension+' · '+extension.display_name;
+    select.append(option);
+  }
+  if([...select.options].some(option=>option.value===selected))select.value=selected;
+}
 async function refresh(){
   const [sum,rows,status,yealinkDevices,grandstreamDevices,polycomDevices,ciscoDevices]=await Promise.all([api('/dashboard/summary'),api('/extensions'),api('/dashboard/status'),api('/devices/yealink'),api('/devices/grandstream'),api('/devices/polycom'),api('/devices/cisco')]);
-  if(currentUser?.role==='admin')await loadUsers();
+  updateWebPhoneExtensions(rows);
+  if(currentUser?.role==='admin'){await loadUsers();await loadTelephonySettings()}
+  await autoProvisionWebPhone();
   $('#api-value').textContent='Online';
   $('#asterisk-value').textContent=status.status==='online'?'Online':'Offline';
   $('#uptime-value').textContent=status.uptime||'Uptime not available';
@@ -346,25 +379,208 @@ $('#export-calls').onclick=async()=>{
     a.href=url;a.download='tomos-call-history.csv';document.body.append(a);a.click();a.remove();URL.revokeObjectURL(url)
   }catch(err){note(err.message)}
 };
-$('#login-form').onsubmit=async e=>{e.preventDefault();try{const result=await api('/auth/login',{method:'POST',body:JSON.stringify({username:$('#username').value,password:$('#password').value})});currentUser=result.user;csrf=cookie('tomos_csrf');setupPromptChecked=false;showApp();await refresh();await checkFirstRunSetup()}catch(err){$('#login-error').textContent=err.message}};
-$('#logout').onclick=async()=>{try{await api('/auth/logout',{method:'POST'})}finally{csrf='';currentUser=null;$('#change-password').hidden=true;$('#current-user').textContent='';showLogin()}};
+function webPhoneStatus(message,connected=false){
+  $('#webphone-status').textContent=message;
+  $('#webphone-status').classList.toggle('connected',connected);
+}
+function webPhoneControls(registered,active=false){
+  $('#webphone-call').disabled=!registered||active;
+  $('#webphone-hangup').disabled=!active;
+  $('#webphone-mute').disabled=!active;
+  $('#webphone-connect').disabled=registered;
+  $('#webphone-extension').disabled=registered;
+  $('#webphone-disconnect').disabled=!registered&&!webPhoneUa;
+}
+function attachWebPhoneAudio(session){
+  const pc=session.sessionDescriptionHandler?.peerConnection;
+  if(!pc)return;
+  const audio=$('#webphone-remote-audio');
+  const remoteStream=new MediaStream();
+  pc.getReceivers().forEach(receiver=>{
+    if(receiver.track&&receiver.track.kind==='audio'&&!remoteStream.getTracks().includes(receiver.track))remoteStream.addTrack(receiver.track);
+  });
+  if(remoteStream.getTracks().length)audio.srcObject=remoteStream;
+  pc.ontrack=event=>{
+    const stream=event.streams?.[0];
+    if(stream)audio.srcObject=stream;
+    else if(!remoteStream.getTracks().includes(event.track))remoteStream.addTrack(event.track);
+    audio.play().catch(()=>note('Tap the page to allow call audio playback'));
+  };
+  if(audio.srcObject)audio.play().catch(()=>note('Tap the page to allow call audio playback'));
+}
+function bindWebPhoneSession(session){
+  webPhoneSession=session;
+  webPhoneControls(true,true);
+  $('#webphone-call-state').textContent='Call connecting…';
+  session.stateChange.addListener(state=>{
+    if(state===webPhoneSip.SessionState.Established){
+      $('#webphone-call-state').textContent='Call connected · '+(session.remoteIdentity?.uri?.user||'internal extension');
+      attachWebPhoneAudio(session);
+      webPhoneControls(true,true);
+    }else if(state===webPhoneSip.SessionState.Terminated){
+      webPhoneSession=null;
+      $('#webphone-incoming').hidden=true;
+      $('#webphone-call-state').textContent='Call ended';
+      $('#webphone-remote-audio').srcObject=null;
+      $('#webphone-mute').textContent='Mute microphone';
+      webPhoneControls(Boolean(webPhoneRegisterer),false);
+    }
+  });
+  attachWebPhoneAudio(session);
+}
+async function connectWebPhone(){
+  const extension=$('#webphone-extension').value;
+  if(!extension){note('Choose an enabled SIP extension first');return}
+  if(!window.isSecureContext){note('The dashboard must be opened over HTTPS with a trusted certificate');return}
+  const button=$('#webphone-connect');button.disabled=true;
+  try{
+    const config=await api('/extensions/'+encodeURIComponent(extension)+'/webrtc');
+    const SIP=await import('https://esm.sh/sip.js@0.21.2?bundle');
+    const uri=SIP.UserAgent.makeURI(config.sip_uri);
+    if(!uri)throw Error('The PBX returned an invalid SIP address');
+    webPhoneSip=SIP;webPhoneConfig=config;
+    webPhoneUa=new SIP.UserAgent({
+      uri,
+      authorizationUsername:config.authorization_username,
+      authorizationPassword:config.authorization_password,
+      transportOptions:{server:config.websocket_url},
+      userAgentString:'TomOS Web Phone',
+      delegate:{onInvite:invitation=>{
+        if(webPhoneSession){invitation.reject();return}
+        bindWebPhoneSession(invitation);
+        $('#webphone-caller').textContent='Incoming call from '+(invitation.remoteIdentity?.uri?.user||'unknown');
+        $('#webphone-incoming').hidden=false;
+        $('#webphone-call-state').textContent='Incoming call';
+      }}
+    });
+    webPhoneUa.transport.stateChange.addListener(state=>webPhoneStatus('WebSocket '+state, state==='Connected'));
+    await webPhoneUa.start();
+    webPhoneRegisterer=new SIP.Registerer(webPhoneUa);
+    await webPhoneRegisterer.register();
+    webPhoneStatus('Registered · '+extension,true);
+    $('#webphone-call-state').textContent='Ready for calls';
+    webPhoneControls(true,false);
+    note('Browser phone registered. Allow microphone access when you place or answer a call.');
+  }catch(error){
+    if(webPhoneUa){try{await webPhoneUa.stop()}catch{}}
+    webPhoneUa=null;webPhoneRegisterer=null;webPhoneSip=null;webPhoneConfig=null;
+    webPhoneStatus('Connection failed');
+    webPhoneControls(false,false);
+    note('Browser phone: '+(error.message||'connection failed'));
+  }finally{button.disabled=Boolean(webPhoneUa)}
+}
+async function disconnectWebPhone(){
+  try{
+    if(webPhoneSession){
+      try{
+        if(webPhoneSession.state===webPhoneSip.SessionState.Established)await webPhoneSession.bye();
+        else if(typeof webPhoneSession.cancel==='function')await webPhoneSession.cancel();
+        else if(typeof webPhoneSession.reject==='function')await webPhoneSession.reject();
+      }catch{}
+    }
+    if(webPhoneRegisterer)try{await webPhoneRegisterer.unregister()}catch{}
+    if(webPhoneUa)try{await webPhoneUa.stop()}catch{}
+  }finally{
+    webPhoneSession=null;webPhoneRegisterer=null;webPhoneUa=null;webPhoneSip=null;webPhoneConfig=null;
+    $('#webphone-incoming').hidden=true;$('#webphone-remote-audio').srcObject=null;
+    $('#webphone-call-state').textContent='Not connected';
+    $('#webphone-mute').textContent='Mute microphone';
+    webPhoneStatus('Disconnected');webPhoneControls(false,false);
+  }
+}
+async function autoProvisionWebPhone(){
+  if(autoPhoneAttempted||!currentUser||currentUser.role==='viewer')return;
+  try{
+    const assignment=await api('/me/webphone');
+    if(!assignment.assigned)return;
+    autoPhoneAttempted=true;
+    const select=$('#webphone-extension');
+    if(![...select.options].some(option=>option.value===assignment.extension)){
+      note('Your assigned browser phone extension is currently unavailable');
+      return;
+    }
+    select.value=assignment.extension;
+    $('#webphone-call-state').textContent='Provisioning assigned extension '+assignment.extension+'…';
+    await connectWebPhone();
+  }catch(error){
+    webPhoneStatus('Not connected');
+    $('#webphone-call-state').textContent='Assigned phone could not connect';
+    note('Assigned browser phone: '+error.message);
+  }
+}
+async function placeWebPhoneCall(){
+  const target=$('#webphone-dial').value.trim();
+  if(!/^[1-9][0-9]{2,5}$/.test(target)){note('Enter a valid internal extension number');return}
+  if(!webPhoneUa||!webPhoneRegisterer){note('Connect the browser phone first');return}
+  if(webPhoneSession){note('Finish the current call first');return}
+  try{
+    const domain=webPhoneConfig.sip_uri.split('@').pop();
+    const targetUri=webPhoneSip.UserAgent.makeURI('sip:'+target+'@'+domain);
+    if(!targetUri)throw Error('Invalid destination extension');
+    const inviter=new webPhoneSip.Inviter(webPhoneUa,targetUri,{
+      sessionDescriptionHandlerOptions:{constraints:{audio:true,video:false}}
+    });
+    bindWebPhoneSession(inviter);
+    await inviter.invite();
+  }catch(error){webPhoneSession=null;webPhoneControls(true,false);note('Could not start call: '+error.message)}
+}
+$('#webphone-connect').onclick=connectWebPhone;
+$('#webphone-disconnect').onclick=disconnectWebPhone;
+$('#webphone-call').onclick=placeWebPhoneCall;
+$('#webphone-dial').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();placeWebPhoneCall()}});
+$('#webphone-answer').onclick=async()=>{
+  if(!webPhoneSession||typeof webPhoneSession.accept!=='function')return;
+  try{await webPhoneSession.accept({sessionDescriptionHandlerOptions:{constraints:{audio:true,video:false}}});$('#webphone-incoming').hidden=true;$('#webphone-call-state').textContent='Answering…'}
+  catch(error){note('Could not answer call: '+error.message)}
+};
+$('#webphone-reject').onclick=async()=>{
+  if(webPhoneSession&&typeof webPhoneSession.reject==='function')try{await webPhoneSession.reject()}catch(error){note(error.message)}
+  $('#webphone-incoming').hidden=true;
+};
+$('#webphone-hangup').onclick=async()=>{
+  if(!webPhoneSession)return;
+  try{
+    if(webPhoneSession.state===webPhoneSip.SessionState.Established)await webPhoneSession.bye();
+    else if(typeof webPhoneSession.cancel==='function')await webPhoneSession.cancel();
+    else if(typeof webPhoneSession.reject==='function')await webPhoneSession.reject();
+  }catch(error){note('Hang-up failed: '+error.message)}
+};
+$('#webphone-mute').onclick=()=>{
+  const pc=webPhoneSession?.sessionDescriptionHandler?.peerConnection;
+  if(!pc)return;
+  const tracks=pc.getSenders().map(sender=>sender.track).filter(track=>track?.kind==='audio');
+  if(!tracks.length)return;
+  const muted=tracks[0].enabled;
+  tracks.forEach(track=>track.enabled=!muted);
+  $('#webphone-mute').textContent=muted?'Unmute microphone':'Mute microphone';
+};
+
+$('#login-form').onsubmit=async e=>{e.preventDefault();try{const result=await api('/auth/login',{method:'POST',body:JSON.stringify({username:$('#username').value,password:$('#password').value})});currentUser=result.user;csrf=cookie('tomos_csrf');setupPromptChecked=false;autoPhoneAttempted=false;showApp();await refresh();await checkFirstRunSetup()}catch(err){$('#login-error').textContent=err.message}};
+$('#logout').onclick=async()=>{try{await api('/auth/logout',{method:'POST'})}finally{await disconnectWebPhone();autoPhoneAttempted=false;csrf='';currentUser=null;$('#change-password').hidden=true;$('#current-user').textContent='';showLogin()}};
 $('#change-password').onclick=()=>$('#own-password-dialog').showModal();
 $('#own-password-form').onsubmit=async e=>{e.preventDefault();try{await api('/auth/password',{method:'POST',body:JSON.stringify({old_password:$('#own-old-password').value,new_password:$('#own-new-password').value})});$('#own-password-dialog').close();$('#own-password-form').reset();note('Your password has been changed')}catch(err){note(err.message)}};
 async function loadUsers(){
-  const users=await api('/users');
+  const [users,extensions]=await Promise.all([api('/users'),api('/extensions')]);
+  const assignable=extensions.filter(item=>item.protocol==='sip'&&item.enabled);
   const body=$('#users');body.replaceChildren();$('#users-empty').hidden=users.length>0;
   for(const user of users){
     const row=document.createElement("tr");
     for(const value of [user.username,user.role]){const cell=document.createElement("td");cell.textContent=value;row.append(cell)}
     const status=document.createElement("td"),pill=document.createElement("span");pill.className="pill "+(user.enabled?"":"off");pill.textContent=user.enabled?"Enabled":"Disabled";status.append(pill);row.append(status);
     const actions=document.createElement("td");
+    const assignment=document.createElement("select");assignment.setAttribute("aria-label","Phone extension for "+user.username);
+    const unassigned=document.createElement("option");unassigned.value="";unassigned.textContent="No phone assigned";assignment.append(unassigned);
+    for(const extension of assignable){const option=document.createElement("option");option.value=extension.extension;option.textContent=extension.extension+" · "+extension.display_name;assignment.append(option)}
+    assignment.value=user.assigned_extension||"";
+    assignment.disabled=user.role==='viewer';
+    assignment.onchange=async()=>{try{await api("/users/"+user.id,{method:"PATCH",body:JSON.stringify({assigned_extension:assignment.value||null})});await loadUsers();note("User phone assignment updated")}catch(error){note(error.message);assignment.value=user.assigned_extension||""}};
     const role=document.createElement("select");role.setAttribute("aria-label","Role for "+user.username);
     for(const [value,label] of [["admin","Administrator"],["operator","Operator"],["viewer","Read-only viewer"]]){const option=document.createElement("option");option.value=value;option.textContent=label;role.append(option)}
     role.value=user.role;role.onchange=async()=>{try{await api("/users/"+user.id,{method:"PATCH",body:JSON.stringify({role:role.value})});await loadUsers();note("Account role updated")}catch(error){note(error.message);role.value=user.role}};
     const toggle=document.createElement("button");toggle.textContent=user.enabled?"Disable":"Enable";toggle.onclick=async()=>{if(user.id===currentUser.id&&user.enabled){note("You cannot disable your own account");return}if(!confirm((user.enabled?"Disable ":"Enable ")+user.username+"?"))return;try{await api("/users/"+user.id,{method:"PATCH",body:JSON.stringify({enabled:!user.enabled})});await loadUsers();note("Account status updated")}catch(error){note(error.message)}};
     const reset=document.createElement("button");reset.textContent="Reset password";reset.onclick=()=>{resetUserId=user.id;$("#user-password-label").textContent="Set a new password for "+user.username+".";$("#user-reset-password").value="";$("#user-password-dialog").showModal()};
     const remove=document.createElement("button");remove.textContent="Delete";remove.disabled=user.id===currentUser.id;remove.onclick=async()=>{if(!confirm("Permanently delete account "+user.username+"?"))return;try{await api("/users/"+user.id,{method:"DELETE"});await loadUsers();note("Account deleted")}catch(error){note(error.message)}};
-    actions.append(role,toggle,reset,remove);row.append(actions);body.append(row);
+    actions.append(assignment,role,toggle,reset,remove);row.append(actions);body.append(row);
   }
   await loadAudit();
 }
@@ -416,8 +632,22 @@ $('#setup-add-phone').onclick=()=>$('#new-extension').click();
 $('#setup-later').onclick=()=>{$('#first-run-setup').hidden=true;note('Setup reminder saved for your next sign-in')};
 $('#setup-complete').onclick=async()=>{
   const button=$('#setup-complete');button.disabled=true;
-  try{await api('/setup/complete',{method:'POST'});$('#first-run-setup').hidden=true;note('First-run setup completed. You can manage phones and extensions any time.')}
-  catch(error){note(error.message)}
+  try{
+    const result=await api('/setup/complete',{method:'POST',body:JSON.stringify({country_code:$('#setup-country').value||'GB'})});
+    $('#telephony-country').value=result.country_code;
+    $('#first-run-setup').hidden=true;
+    note('First-run setup completed. '+(result.country_code==='GB'?'United Kingdom dial plan applied.':'International/manual profile applied.'));
+  }catch(error){note(error.message)}
+  finally{button.disabled=false}
+};
+$('#telephony-settings-form').onsubmit=async event=>{
+  event.preventDefault();
+  const button=$('#telephony-settings-form button');button.disabled=true;
+  try{
+    const result=await api('/settings/telephony',{method:'PUT',body:JSON.stringify({country_code:$('#telephony-country').value})});
+    $('#setup-country').value=result.country_code;
+    note('Country dial-plan profile saved and Asterisk configuration reloaded.');
+  }catch(error){note(error.message)}
   finally{button.disabled=false}
 };
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>b.closest('dialog').close());
