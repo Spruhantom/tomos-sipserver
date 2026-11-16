@@ -21,3 +21,16 @@
 #cisco-devices td:nth-child(6){color:#9db2cd;font-size:12px}
 .role-viewer #cisco-devices button{display:none}
 @media(max-width:560px){#create-dialog{padding:18px}#create-dialog .actions{align-items:stretch;flex-direction:column}#create-dialog .actions button{width:100%}}
+
+.first-run-setup{margin:0 0 22px;border:1px solid #42618a;background:linear-gradient(145deg,#14243a,#101a2b)}
+.first-run-setup .eyebrow{margin:0 0 6px}
+.first-run-setup .section-head h2{margin:0 0 6px}
+.setup-step{font-size:12px;color:#9db7d8;border:1px solid #405b7e;border-radius:20px;padding:6px 10px;white-space:nowrap}
+.setup-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:18px}
+.setup-card{min-width:0;padding:16px;border:1px solid #31445e;border-radius:12px;background:#0c1728}
+.setup-card h3{margin:8px 0;font-size:16px}
+.setup-card p{font-size:13px;line-height:1.55;color:#aebed1;min-height:60px}
+.setup-card strong{display:block;font-size:12px;color:#a9c8f0;margin:10px 0}
+.setup-number{font-size:12px;font-weight:700;color:#70a9f5}
+.setup-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
+@media(max-width:760px){.setup-grid{grid-template-columns:1fr}.setup-card p{min-height:0}.setup-actions{flex-direction:column-reverse}.setup-actions button{width:100%}}
