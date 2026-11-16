@@ -45,7 +45,7 @@ jobs:
             build-essential bison flex libtool-bin git wget curl ca-certificates pkg-config python3 openssl \
             libxml2-dev libncurses-dev uuid-dev libsqlite3-dev libssl-dev libedit-dev \
             libjansson-dev libcurl4-openssl-dev libnewt-dev libspandsp-dev libsrtp2-dev \
-            libspeexdsp-dev libopus-dev libogg-dev libvorbis-dev libasound2-dev libxslt1-dev gettext python3-venv sudo
+            libspeexdsp-dev libopus-dev libogg-dev libvorbis-dev libasound2-dev libxslt1-dev gettext python3-venv sudo sqlite3
       - name: Download and verify pinned Asterisk source
         shell: bash
         run: |
@@ -109,13 +109,19 @@ jobs:
           python3 scripts/render-config.py --output-dir /etc/asterisk \
             --extension "100:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
             --extension "101:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          cat >> /etc/asterisk/extensions.conf <<'EOF'
-          [tomos-cdr-test]
-          exten => 900,1,Set(CALLERID(num)=100)
-           same => n,Answer()
-           same => n,Wait(1)
-           same => n,Hangup()
-          EOF
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("/etc/asterisk/extensions.conf")
+          config = path.read_text(encoding="utf-8")
+          marker = "[tomos-internal]"
+          if config.count(marker) != 1:
+              raise SystemExit("expected exactly one generated [tomos-internal] context")
+          # Put the answered-call fixture in the already-generated internal
+          # context so the test exercises the same dialplan Asterisk loads
+          # for normal extensions, without relying on a second context block.
+          config += "\nexten => 900,1,Set(CALLERID(num)=100)\n same => n,Answer()\n same => n,Wait(1)\n same => n,Hangup()\n"
+          path.write_text(config, encoding="utf-8")
+          PY
           chown root:asterisk /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
           chmod 0640 /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
       - name: Prepare API integration environment
