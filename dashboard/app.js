@@ -372,7 +372,7 @@ $('#audit-refresh').onclick=()=>loadAudit().catch(error=>note(error.message));
 $("#user-create-form").onsubmit=async event=>{event.preventDefault();const button=$("#user-create-form button");button.disabled=true;try{const result=await api("/users",{method:"POST",body:JSON.stringify({username:$("#new-username").value.trim(),password:$("#new-user-password").value,role:$("#new-user-role").value})});$("#user-create-form").reset();await loadUsers();note("Created "+result.role+" account "+result.username)}catch(error){note(error.message)}finally{button.disabled=false}};
 $("#user-password-form").onsubmit=async event=>{event.preventDefault();if(!resetUserId)return;const button=$("#user-password-form button.primary");button.disabled=true;try{await api("/users/"+resetUserId+"/password",{method:"POST",body:JSON.stringify({password:$("#user-reset-password").value})});$("#user-password-dialog").close();$("#user-password-form").reset();note("Account password reset")}catch(error){note(error.message)}finally{button.disabled=false}};
 
-$('#new-extension').onclick=()=>{$('#create-form').reset();$('#protocol').value='sip';$('#sccp-fields').hidden=true;$('#create-dialog').showModal()};
+$('#new-extension').onclick=()=>{$('#create-form').reset();$('#protocol').value='sip';$('#protocol').onchange();$('#create-dialog').showModal()};
 $('#protocol').onchange=()=>{const isSccp=$('#protocol').value==='sccp';$('#sccp-fields').hidden=!isSccp;$('#cisco-mac').required=isSccp;$('#cisco-host').required=isSccp};
 $('#create-form').onsubmit=async e=>{
   e.preventDefault();
