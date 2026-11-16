@@ -457,6 +457,8 @@ def create_app(
                 if remaining == 0:
                     raise HTTPException(status_code=409, detail="Cannot disable or demote the last active administrator")
             next_extension = changes.get("assigned_extension", target["assigned_extension"])
+            if next_extension is not None and next_role == "viewer":
+                raise HTTPException(status_code=409, detail="Read-only viewer accounts cannot be assigned a browser phone")
             if next_extension is not None:
                 extension_row = connection.execute(
                     "SELECT protocol, enabled FROM extensions WHERE extension = ?", (next_extension,)
@@ -1223,6 +1225,13 @@ def create_app(
         """Return the dedicated browser SIP identity to a signed-in non-viewer."""
         if principal["role"] == "viewer":
             raise HTTPException(status_code=403, detail="Browser calling requires operator or administrator access")
+        if principal.get("id") is not None and principal["role"] != "admin":
+            with connect(db_path) as connection:
+                owner = connection.execute(
+                    "SELECT assigned_extension FROM admin_users WHERE id = ?", (principal["id"],)
+                ).fetchone()
+            if owner is None or owner["assigned_extension"] != extension:
+                raise HTTPException(status_code=403, detail="You can only use the browser phone assigned to your account")
         if not re.fullmatch(EXTENSION_PATTERN, extension):
             raise HTTPException(status_code=422, detail="Invalid extension number")
         with connect(db_path) as connection:
