@@ -27,6 +27,14 @@ python3 scripts/check-webrtc-endpoint.py PBX-HOST --ca-file /path/to/ca-chain.pe
 
 A pass confirms the certificate chain and hostname are trusted and Asterisk accepts a valid WebSocket upgrade on `/ws`. It does **not** prove SIP registration, media negotiation, ICE reachability or two-way audio.
 
+The helper uses only Python's standard library. Its defaults are TCP port `8089`, path `/ws` and an eight-second connection/read timeout. Use `--port`, `--path` or `--timeout` only when your deployment intentionally differs from those defaults. For example:
+
+```bash
+python3 scripts/check-webrtc-endpoint.py PBX-HOST --port 8089 --path /ws --timeout 12
+```
+
+The command exits with status `0` when TLS validation and the WebSocket handshake pass, and non-zero when the connection, certificate validation or upgrade fails. It does not authenticate a SIP user or place a call.
+
 ## Two-device test sequence
 
 Use two separate devices (for example, Android Chrome and desktop Chrome/Firefox), each signed in as a different assigned dashboard user. Keep both on the same trusted LAN for the first run; repeat over the approved VPN only after LAN tests pass.
@@ -66,5 +74,10 @@ sudo journalctl -u tomos-sipserver-api --since '10 minutes ago'
 ## Acceptance criteria
 
 A device/browser combination is accepted only when both phones register, incoming and outgoing internal calls complete, two-way audio works, mute/decline/hang-up work, and no stale registration or media remains after ending/reloading. Mark unsupported combinations as unverified rather than assuming compatibility.
+
+
+## CI coverage and what remains manual
+
+The repository workflow compiles `scripts/check-webrtc-endpoint.py`, runs the Python unit suite and builds/starts the pinned Asterisk environment to verify the configured PJSIP endpoints and dial plan. A green workflow confirms those automated checks only. It does not exercise a real browser session, browser microphone permissions, ICE/media connectivity or audio playback/capture. Keep WEB-01 through WEB-13 marked **Not run** until each check has been performed on the target devices; record the browser, OS, network and tested commit with the results.
 
 The repository CI cannot perform physical-device microphone/audio tests. Those rows must be completed on the actual target devices and network before describing browser calling as hardware-validated.
