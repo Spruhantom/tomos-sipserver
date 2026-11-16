@@ -137,6 +137,8 @@ install -d -o root -g root -m 0755 /opt/tomos-sipserver/app
 rm -rf /opt/tomos-sipserver/app/tomos_sipserver
 cp -a "$REPO_ROOT/tomos_sipserver" /opt/tomos-sipserver/app/
 install -m 0644 "$REPO_ROOT/scripts/render-config.py" /opt/tomos-sipserver/app/render-config.py
+install -d -m 0755 /opt/tomos-sipserver/app/scripts
+install -m 0755 "$REPO_ROOT/scripts/tomos-sipserver-backup" /opt/tomos-sipserver/app/scripts/tomos-sipserver-backup
 install -d -m 0755 /opt/tomos-sipserver/app/dashboard
 cp -a "$REPO_ROOT/dashboard/." /opt/tomos-sipserver/app/dashboard/
 chown -R root:root /opt/tomos-sipserver
@@ -188,6 +190,8 @@ install -D -o root -g root -m 0755 "$REPO_ROOT/scripts/tomos-sipserver-status" /
 install -D -o root -g root -m 0440 "$REPO_ROOT/sudoers/tomos-sipserver-api" /etc/sudoers.d/tomos-sipserver-api
 visudo -cf /etc/sudoers.d/tomos-sipserver-api
 install -D -m 0644 "$REPO_ROOT/systemd/tomos-sipserver-api.service" /etc/systemd/system/tomos-sipserver-api.service
+install -D -m 0644 "$REPO_ROOT/systemd/tomos-sipserver-backup.service" /etc/systemd/system/tomos-sipserver-backup.service
+install -D -m 0644 "$REPO_ROOT/systemd/tomos-sipserver-backup.timer" /etc/systemd/system/tomos-sipserver-backup.timer
 
 install -m 0644 "$REPO_ROOT/asterisk/asterisk.conf" /etc/asterisk/asterisk.conf
 install -m 0644 "$REPO_ROOT/asterisk/modules.conf" /etc/asterisk/modules.conf
@@ -229,6 +233,7 @@ fi
 systemctl enable --now tomos-sipserver.service
 /usr/local/sbin/tomos-sipserver-check
 systemctl enable --now tomos-sipserver-api.service
+systemctl enable --now tomos-sipserver-backup.timer
 
 CREDENTIAL_FILE=/root/tomos-sip-credentials.txt
 umask 077
