@@ -39,3 +39,10 @@ outbound routes or inbound DID handling. The live apply path still needs
 provider transport definitions, certificate validation for TLS, provider
 interop tests and a reviewed emergency-call policy before activation can be
 implemented. Existing internal calling is unchanged.
+
+
+## Dashboard trunk credential management
+
+The administrator dashboard now provides a trunk settings panel backed by four admin-only API operations: read safe status, save credentials, rotate the provider secret, and disable the trunk. The API calls a fixed-purpose root helper through a narrowly scoped sudoers entry; secrets are sent on standard input rather than command-line arguments and are never included in API responses or helper errors. The root helper stores credentials through the atomic root-only trunk store. The password field is never pre-populated, and a saved trunk remains disabled.
+
+This is credential management only. It does not yet create provider transport definitions, validate provider TLS certificates, register to a live provider, install outbound routes, or enable external calls. Selecting TLS in the dashboard records the preference only; it is not an indication that TLS is configured or active. Provider-specific interoperability still requires the provider's documented registrar, proxy, authentication and certificate requirements.
