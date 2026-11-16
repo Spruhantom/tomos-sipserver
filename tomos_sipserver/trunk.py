@@ -55,9 +55,9 @@ def render_trunk_transport(trunk: Trunk, ca_bundle: str = "/etc/ssl/certs/ca-cer
     ca = Path(ca_bundle)
     if not ca_bundle.startswith("/") or ca.is_symlink() or not ca.is_file():
         raise ValueError("TLS requires an absolute, regular CA bundle path")
-    if any(ch in ca_bundle for ch in "\\r\\n"):
+    if any(ch in ca_bundle for ch in "\r\n"):
         raise ValueError("Invalid TLS CA bundle path")
-    return "\\n".join([
+    return "\n".join([
         "[transport-tls]", "type=transport", "protocol=tls",
         "bind=0.0.0.0:0", "method=tlsv1_2",
         "verify_server=yes", "verify_client=no",
