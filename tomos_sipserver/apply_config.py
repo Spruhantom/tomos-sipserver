@@ -11,6 +11,8 @@ from contextlib import closing
 from pathlib import Path
 
 from .cisco import render_phone_xml, render_sccp_config
+from .trunk_store import load_trunk
+from .trunk import render_trunk_pjsip, render_trunk_transport
 
 APP_DIR = Path(__file__).resolve().parent.parent
 RENDERER_PATH = APP_DIR / "render-config.py"
@@ -85,7 +87,11 @@ def apply(reload_asterisk: bool = True) -> None:
         for path in TFTP_DIR.glob("SEP*.cnf.xml") if path.is_file()
     }
     try:
-        renderer.atomic_write(paths[0], renderer.render_pjsip(extensions, webrtc_extensions))
+        pjsip_content = renderer.render_pjsip(extensions, webrtc_extensions)
+        trunk = load_trunk()
+        if trunk is not None and trunk.enabled:
+            pjsip_content += render_trunk_transport(trunk) + render_trunk_pjsip(trunk)
+        renderer.atomic_write(paths[0], pjsip_content)
         renderer.atomic_write(paths[1], renderer.render_dialplan(extensions, sccp_extensions, webrtc_numbers, country_code=country_code))
         renderer.atomic_write(paths[2], "".join(config for config, _ in cisco_configs.values()))
         for path in paths:
