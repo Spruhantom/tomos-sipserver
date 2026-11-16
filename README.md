@@ -97,6 +97,7 @@ The browser phone:
 - Uses WebRTC DTLS-SRTP, ICE, RTCP mux and audio-only media. Microphone permission is requested by the browser when a call is answered or placed.
 - Rings alongside the regular SIP phone when another internal extension calls it. Browser-to-extension calls use the existing internal dialplan.
 - Provides connect/register, incoming-call answer/decline, outgoing internal extension dialling, mute and hang-up controls.
+- Administrators can assign one enabled SIP extension to each dashboard account in User Management. An extension can be assigned to only one user. On sign-in, TomOS automatically retrieves that user's dedicated WebRTC identity and registers the browser phone; no SIP username or password needs to be entered. Assignments can be cleared or changed by an administrator.
 
 ### TLS and network requirements
 
