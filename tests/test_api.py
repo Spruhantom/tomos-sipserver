@@ -250,6 +250,8 @@ class ExtensionApiTests(unittest.TestCase):
         extension = self.client.post("/api/v1/extensions", headers=self.headers,
                                      json={"extension": "130", "display_name": "Tom's desk"})
         self.assertEqual(extension.status_code, 201)
+        self.client.post("/api/v1/extensions", headers=self.headers,
+                         json={"extension": "133", "display_name": "Another desk"})
         created = self.client.post("/api/v1/users", headers=self.headers,
                                    json={"username": "phoneuser", "password": "phone-user-password-012345", "role": "operator"})
         self.assertEqual(created.status_code, 201)
@@ -269,8 +271,19 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertEqual(payload["phone"]["authorization_username"], "130-web")
         self.assertEqual(payload["phone"]["media_encryption"], "DTLS-SRTP")
         self.assertNotIn("password", payload["phone"])
+        self.assertEqual(self.client.get("/api/v1/extensions/130/webrtc").status_code, 200)
+        self.assertEqual(self.client.get("/api/v1/extensions/133/webrtc").status_code, 403)
         self.client.post("/api/v1/auth/logout")
         self.assertEqual(self.client.get("/api/v1/me/webphone").status_code, 401)
+
+    def test_viewer_accounts_cannot_be_assigned_browser_phones(self):
+        self.client.post("/api/v1/extensions", headers=self.headers,
+                         json={"extension": "134", "display_name": "Viewer test"})
+        viewer = self.client.post("/api/v1/users", headers=self.headers,
+                                  json={"username": "phoneviewer", "password": "viewer-phone-password-012345", "role": "viewer"}).json()
+        response = self.client.patch(f"/api/v1/users/{viewer['id']}", headers=self.headers,
+                                     json={"assigned_extension": "134"})
+        self.assertEqual(response.status_code, 409)
 
     def test_extension_assignment_is_unique_and_sip_only(self):
         self.client.post("/api/v1/extensions", headers=self.headers,
