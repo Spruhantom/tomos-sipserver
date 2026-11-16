@@ -4,7 +4,7 @@ A self-hosted home telephone system for Debian 13, built around Asterisk with a 
 
 ## Current status
 
-The Debian 13 Asterisk foundation passes CI; CI now also builds and integration-checks the initial Cisco SCCP driver. The installer builds Asterisk 22 LTS and the pinned AI3I/chan_sccp driver, while retaining PJSIP for ordinary SIP phones. The repository includes an authenticated FastAPI extension-management API, SQLite persistence, a privileged configuration-apply helper and systemd units. The dashboard provides extension management, live registration status, call history and Yealink, Grandstream and Polycom provisioning workflows. Cisco SCCP inventory now generates separate SEP profile families: the 7940/7960 family shares the legacy profile structure, while the 7970 uses the distinct 797x full-configuration structure from the pinned chan_sccp templates. The API exposes a model compatibility catalogue and explicitly reports firmware validation and physical handset testing as outstanding. Physical Cisco handset and firmware compatibility remain unverified. Asterisk writes call-detail records to a separate local SQLite database; call audio is not recorded.
+The Debian 13 Asterisk foundation passes CI; CI now also builds and integration-checks the initial Cisco SCCP driver. The installer builds Asterisk 22 LTS and the pinned AI3I/chan_sccp driver, while retaining PJSIP for ordinary SIP phones. The repository includes an authenticated FastAPI extension-management API, SQLite persistence, a privileged configuration-apply helper and systemd units. The dashboard provides extension management, live registration status, call history and Yealink, Grandstream, Polycom and Cisco provisioning workflows. Extensions now have an explicit SIP/PJSIP or Cisco SCCP protocol; PJSIP endpoints and SCCP line/device configuration are generated separately. Existing Cisco assignments retain their previous dual-protocol behaviour during upgrade. Cisco SCCP inventory generates separate SEP profile families: the 7940/7960 family shares the legacy profile structure, while the 7970 uses the distinct 797x full-configuration structure from the pinned chan_sccp templates. The API exposes a model compatibility catalogue and explicitly reports firmware validation and physical handset testing as outstanding. Physical Cisco handset and firmware compatibility remain unverified. Asterisk writes call-detail records to a separate local SQLite database; call audio is not recorded.
 
 ## Install (Debian 13 only)
 
@@ -56,8 +56,8 @@ The dashboard is served at `http://127.0.0.1:8000/`. On the first install, sign 
 - `POST /api/v1/users/{id}/password` — reset a user's password (administrators only).
 - `POST /api/v1/auth/password` — change the signed-in user's password after verifying the current password.
 - `GET /api/v1/audit?limit=50&offset=0` — list newest account audit events (admins only), with an optional exact `action` filter. Records account creation, role changes, enable/disable, deletion, administrator password resets and self-service password changes. Passwords and password hashes are never written to audit events.
-- `GET /api/v1/extensions` — list extensions without exposing SIP passwords.
-- `POST /api/v1/extensions` — create an extension; a generated SIP password is returned once. Body: `{"extension":"120","display_name":"Office"}`.
+- `GET /api/v1/extensions` — list extensions with their `protocol` (`sip` or `sccp`) without exposing SIP passwords.
+- `POST /api/v1/extensions` — create an extension. The `protocol` field defaults to `sip`; SIP creation returns a generated password once. Example SIP body: `{"extension":"120","display_name":"Office","protocol":"sip"}`. For a Cisco SCCP extension, use `{"extension":"130","display_name":"Reception","protocol":"sccp"}` and then register the Cisco handset using `POST /api/v1/devices/cisco`. SCCP extensions do not receive or expose SIP passwords.
 - `PATCH /api/v1/extensions/{extension}` — update `display_name` or `enabled`.
 - `POST /api/v1/extensions/{extension}/password` — rotate the SIP password and return it once.
 - `POST /api/v1/extensions/{extension}/enable` and `/disable` — enable or disable registration.
@@ -95,7 +95,7 @@ Each mutation regenerates PJSIP and dialplan configuration and requests an Aster
 | SIP | PJSIP |
 | API | Python / FastAPI |
 | Database | SQLite |
-| Planned web UI | React / TypeScript |
+| Web dashboard | HTML / CSS / JavaScript |
 | Planned browser calling | SIP.js, WebRTC and secure WebSockets |
 | Service supervision | systemd |
 
@@ -114,7 +114,7 @@ Each mutation regenerates PJSIP and dialplan configuration and requests an Aster
 
 1. **Foundation (passed CI):** Debian 13 source-build installer, Asterisk, PJSIP, internal extensions, systemd and CI.
 2. **Extension API (current):** authenticated FastAPI CRUD, SQLite persistence, password rotation, enable/disable and configuration rollback.
-3. **Dashboard (initial release):** password login, session/CSRF protection, extension listing, create, enable/disable, delete and one-time password reset display. Multi-user backend now supports administrator, operator and read-only roles, PBKDF2 password hashes, account enable/disable, password resets and last-admin safeguards; dashboard account-management screens remain to be added. Device registration, generic SIP setup notes and searchable call history, date/number/result filters and CSV export are now included.
+3. **Dashboard:** responsive authenticated web UI with SIP/PJSIP and Cisco SCCP extension creation, Cisco model/MAC/host assignment, extension enable/disable/delete, SIP password reset, vendor SIP provisioning, registration status, call history and CSV export. Multi-user account management includes administrator, operator and read-only roles, PBKDF2 password hashes, account enable/disable, password resets, self-service password changes, last-admin safeguards and an administrator audit panel.
 4. **Vendor provisioning (in progress):** Yealink, Grandstream and Polycom MAC-specific provisioning workflows are implemented with per-device credentials. Cisco SCCP driver, device inventory, chan_sccp device/line sections and model-specific `SEP<MAC>.cnf.xml` profile families are integrated. The 7940/7960 and 7970 renderers are checked separately in CI. Configure a restricted TFTP service on the voice LAN and verify the exact handset firmware and physical devices before claiming hardware compatibility.
 5. Browser phone: SIP.js, WSS, SRTP and persistent in-dashboard call controls.
 6. Home features: voicemail, call history, groups, forwarding, DND, backups and restore.
