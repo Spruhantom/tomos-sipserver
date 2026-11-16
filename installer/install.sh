@@ -67,7 +67,7 @@ log "Installing Asterisk and API dependencies."
 apt-get update
 apt-get install -y --no-install-recommends build-essential git wget curl ca-certificates pkg-config python3 python3-venv sudo openssl \
   libxml2-dev libxslt1-dev gettext libncurses-dev uuid-dev libsqlite3-dev libssl-dev libedit-dev libjansson-dev \
-  libcurl4-openssl-dev libnewt-dev libspandsp-dev libsrtp2-dev
+  libcurl4-openssl-dev libnewt-dev libspandsp-dev libsrtp2-dev libopus-dev
 
 install -d -m 0755 "$BUILD_ROOT"
 if [[ ! -s "$ARCHIVE" ]]; then
