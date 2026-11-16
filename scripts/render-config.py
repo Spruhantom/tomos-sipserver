@@ -99,7 +99,27 @@ def render_dialplan(extensions: list[tuple[str, str]],
             "; UK national and international number recognition.",
             "; Outbound calls are deliberately blocked until a SIP trunk is configured.",
             "include => tomos-country-outbound",
-            "",
+        ])
+
+    for number in sorted(numbers):
+        targets = []
+        if number in sip_numbers:
+            targets.append(f"PJSIP/{number}")
+        if number in sccp_numbers:
+            targets.append(f"SCCP/{number}")
+        if number in browser_numbers:
+            targets.append(f"PJSIP/webrtc-{number}")
+        technology = "&".join(targets)
+        lines.extend([
+            f"exten => {number},1,NoOp(TomOS internal call to {number})",
+            f" same => n,Dial({technology},30)", " same => n,Hangup()",
+        ])
+    lines.extend([
+        "exten => _1XX,1,NoOp(TomOS three-digit internal extension)",
+        " same => n,Dial(PJSIP/${EXTEN},30)", " same => n,Hangup()", "",
+    ])
+    if country_code == "GB":
+        lines.extend([
             "[tomos-country-outbound]",
             "exten => 999,1,NoOp(UK emergency call blocked: no emergency-capable trunk configured)",
             " same => n,Playback(all-circuits-busy-now)",
@@ -121,24 +141,6 @@ def render_dialplan(extensions: list[tuple[str, str]],
         ])
     else:
         lines.append("; International/manual profile selected: no country-specific outbound patterns are enabled.")
-
-    for number in sorted(numbers):
-        targets = []
-        if number in sip_numbers:
-            targets.append(f"PJSIP/{number}")
-        if number in sccp_numbers:
-            targets.append(f"SCCP/{number}")
-        if number in browser_numbers:
-            targets.append(f"PJSIP/webrtc-{number}")
-        technology = "&".join(targets)
-        lines.extend([
-            f"exten => {number},1,NoOp(TomOS internal call to {number})",
-            f" same => n,Dial({technology},30)", " same => n,Hangup()",
-        ])
-    lines.extend([
-        "exten => _1XX,1,NoOp(TomOS three-digit internal extension)",
-        " same => n,Dial(PJSIP/${EXTEN},30)", " same => n,Hangup()", "",
-    ])
     return "\n".join(lines)
 
 def main() -> int:
