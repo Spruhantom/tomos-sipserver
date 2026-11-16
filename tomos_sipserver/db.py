@@ -64,6 +64,19 @@ def initialize_database(path: str | Path = DEFAULT_DB) -> None:
         """)
         connection.execute("CREATE INDEX IF NOT EXISTS admin_users_role_enabled_idx ON admin_users(role, enabled)")
         connection.execute("""
+            CREATE TABLE IF NOT EXISTS setup_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                completed INTEGER NOT NULL DEFAULT 1 CHECK (completed IN (0, 1)),
+                completed_at TEXT,
+                completed_by TEXT
+            )
+        """)
+        # Existing installations are considered configured. A genuinely fresh
+        # database is marked pending by create_app before its first admin is added.
+        connection.execute(
+            "INSERT OR IGNORE INTO setup_state(id, completed) VALUES (1, 1)"
+        )
+        connection.execute("""
             CREATE TABLE IF NOT EXISTS audit_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 occurred_at TEXT NOT NULL,
