@@ -62,6 +62,7 @@ async function refresh(){
   }
   $('#total-value').textContent=sum.extensions_total;
   $('#enabled-value').textContent=sum.extensions_enabled;
+  if(!$('#first-run-setup').hidden)$('#setup-extension-count').textContent=sum.extensions_total+' extension'+(sum.extensions_total===1?'':'s')+' configured';
   $('#api-status').textContent='API online';
   await loadCalls();
   $('#yealink-devices').replaceChildren();
