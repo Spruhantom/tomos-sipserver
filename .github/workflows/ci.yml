@@ -137,6 +137,7 @@ jobs:
             --database /var/lib/tomos-sipserver/extensions.db \
             --seed-extension "100:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
             --seed-extension "101:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          PYTHONPATH=/opt/tomos-sipserver/app /opt/tomos-sipserver/venv/bin/python -m tomos_sipserver.apply_config --no-reload
           chown tomos:tomos /var/lib/tomos-sipserver/extensions.db
           install -D -o root -g root -m 0755 scripts/tomos-sipserver-apply-config /usr/local/sbin/tomos-sipserver-apply-config
           install -D -o root -g root -m 0755 scripts/tomos-sipserver-status /usr/local/sbin/tomos-sipserver-status
