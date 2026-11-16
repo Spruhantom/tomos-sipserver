@@ -402,7 +402,7 @@ def create_app(
     def setup_status(principal: dict = Depends(require_token)):
         with connect(db_path) as connection:
             state = connection.execute(
-                "SELECT completed, completed_at, completed_by FROM setup_state WHERE id = 1"
+                "SELECT completed, completed_at, completed_by, country_code FROM setup_state WHERE id = 1"
             ).fetchone()
             extensions = connection.execute("SELECT COUNT(*) FROM extensions").fetchone()[0]
             devices = sum(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
