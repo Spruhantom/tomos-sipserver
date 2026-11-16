@@ -117,12 +117,12 @@ jobs:
           if config.count(marker) != 1:
               raise SystemExit("expected exactly one generated [tomos-internal] context")
           start = config.index(marker) + len(marker)
-          next_context = config.find("\\n[", start)
+          next_context = config.find("\n[", start)
           if next_context < 0:
               raise SystemExit("could not locate the next dialplan context")
           # Insert the answered-call fixture before the next context header,
           # keeping it inside [tomos-internal] even when country contexts exist.
-          fixture = "\\nexten => 900,1,Set(CALLERID(num)=100)\\n same => n,Answer()\\n same => n,Wait(1)\\n same => n,Hangup()\\n"
+          fixture = "\nexten => 900,1,Set(CALLERID(num)=100)\n same => n,Answer()\n same => n,Wait(1)\n same => n,Hangup()\n"
           config = config[:next_context] + fixture + config[next_context:]
           path.write_text(config, encoding="utf-8")
           PY
@@ -203,13 +203,13 @@ jobs:
           grep -Fq 'webrtc-100' <<<"$WEBRTC_ENDPOINTS"
           grep -Fq 'webrtc-101' <<<"$WEBRTC_ENDPOINTS"
           HTTP_STATUS="$(asterisk -rx 'http show status')"
-          printf '%s\\n' "$HTTP_STATUS"
+          printf '%s\n' "$HTTP_STATUS"
           grep -Fq '8089' <<<"$HTTP_STATUS"
           SCCP_MODULES="$(asterisk -rx 'module show like chan_sccp.so')"
-          printf '%s\\n' "$SCCP_MODULES"
+          printf '%s\n' "$SCCP_MODULES"
           grep -Fq 'chan_sccp.so' <<<"$SCCP_MODULES"
           SCCP_DEVICES="$(asterisk -rx 'sccp show devices')"
-          printf '%s\\n' "$SCCP_DEVICES"
+          printf '%s\n' "$SCCP_DEVICES"
           STATUS="$(/usr/local/sbin/tomos-sipserver-status)"
           grep -Fq '"status": "online"' <<<"$STATUS"
           grep -Fq '"registered_count": 0' <<<"$STATUS"
