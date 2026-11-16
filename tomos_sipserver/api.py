@@ -483,7 +483,7 @@ def create_app(
                 _record_audit(connection, principal, "user.enabled" if next_enabled else "user.disabled",
                               user_id, target["username"],
                               {"from": bool(target["enabled"]), "to": bool(next_enabled)})
-            row = connection.execute("SELECT id, username, role, enabled FROM admin_users WHERE id = ?", (user_id,)).fetchone()
+            row = connection.execute("SELECT id, username, role, enabled, assigned_extension FROM admin_users WHERE id = ?", (user_id,)).fetchone()
         return {"id": row["id"], "username": row["username"], "role": row["role"], "enabled": bool(row["enabled"]), "assigned_extension": row["assigned_extension"]}
 
     @app.delete("/api/v1/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["user management"])
@@ -1247,7 +1247,7 @@ def create_app(
             "extension": row["extension"],
             "display_name": row["display_name"],
             "websocket_url": websocket_url,
-            "sip_uri": f"sip:webrtc-{extension}@{sip_domain}",
+            "sip_uri": f"sip:webrtc-aor-{extension}@{sip_domain}",
             "authorization_username": f"{extension}-web",
             "authorization_password": row["webrtc_password"],
             "secure_media": True,
