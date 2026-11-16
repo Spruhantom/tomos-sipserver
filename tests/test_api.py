@@ -193,6 +193,21 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertEqual(listed["141"]["protocol"], "sccp")
         self.assertEqual(self.client.get("/api/v1/extensions/141/provisioning", headers=self.headers).status_code, 409)
 
+    def test_legacy_database_migrates_existing_extensions_to_sip(self):
+        import sqlite3
+        legacy = Path(self.tmp.name) / "legacy.db"
+        with sqlite3.connect(legacy) as connection:
+            connection.execute("""CREATE TABLE extensions (
+                extension TEXT PRIMARY KEY, display_name TEXT NOT NULL, password TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            )""")
+            connection.execute("INSERT INTO extensions VALUES (?, ?, ?, 1, ?, ?)",
+                               ("150", "Legacy desk", "x" * 32, "2026-01-01", "2026-01-01"))
+        initialize_database(legacy)
+        with connect(legacy) as connection:
+            row = connection.execute("SELECT protocol FROM extensions WHERE extension = '150'").fetchone()
+        self.assertEqual(row["protocol"], "sip")
+
     def test_duplicate_extension_is_rejected(self):
         payload = {"extension": "121", "display_name": "Desk"}
         self.assertEqual(self.client.post("/api/v1/extensions", headers=self.headers, json=payload).status_code, 201)
