@@ -21,8 +21,8 @@ const api=async(path,opt={})=>{
   if(!r.ok){let d={};try{d=await r.json()}catch{}throw Error(d.detail||'Request failed')}
   return r.status===204?null:r.json()
 };
-function showLogin(){if(typeof webPhoneUa!=='undefined'&&webPhoneUa)disconnectWebPhone().catch(()=>{});$('#login').hidden=false;$('#app').hidden=true;$('#logout').hidden=true;$('#change-password').hidden=true;$('#current-user').textContent='';currentUser=null}
-function showApp(){$('#login').hidden=true;$('#app').hidden=false;$('#logout').hidden=false;$('#change-password').hidden=false;$('#current-user').textContent=currentUser?currentUser.username+' · '+currentUser.role:'';$('#app').classList.toggle('role-viewer',currentUser?.role==='viewer');$('#app').classList.toggle('role-operator',currentUser?.role==='operator');$('#user-management').hidden=currentUser?.role!=='admin';}
+function showLogin(){if(typeof webPhoneUa!=='undefined'&&webPhoneUa)disconnectWebPhone().catch(()=>{});telephonySettingsLoaded=false;$('#telephony-settings').hidden=true;$('#login').hidden=false;$('#app').hidden=true;$('#logout').hidden=true;$('#change-password').hidden=true;$('#current-user').textContent='';currentUser=null}
+function showApp(){$('#login').hidden=true;$('#app').hidden=false;$('#logout').hidden=false;$('#change-password').hidden=false;$('#current-user').textContent=currentUser?currentUser.username+' · '+currentUser.role:'';$('#app').classList.toggle('role-viewer',currentUser?.role==='viewer');$('#app').classList.toggle('role-operator',currentUser?.role==='operator');$('#user-management').hidden=currentUser?.role!=='admin';$('#telephony-settings').hidden=currentUser?.role!=='admin';}
 function note(s){const n=$('#notice');n.textContent=s;n.style.display='block';setTimeout(()=>n.style.display='none',3200)}
 async function checkFirstRunSetup(){
   if(setupPromptChecked||currentUser?.role!=='admin')return;
