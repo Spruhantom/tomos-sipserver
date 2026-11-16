@@ -1,6 +1,7 @@
 const $=s=>document.querySelector(s);
 let csrf='';
 let currentUser=null;
+let setupPromptChecked=false;
 let resetUserId=null;
 let callFilters={};
 let callOffset=0;
@@ -16,6 +17,15 @@ const api=async(path,opt={})=>{
 function showLogin(){$('#login').hidden=false;$('#app').hidden=true;$('#logout').hidden=true;$('#change-password').hidden=true;$('#current-user').textContent='';currentUser=null}
 function showApp(){$('#login').hidden=true;$('#app').hidden=false;$('#logout').hidden=false;$('#change-password').hidden=false;$('#current-user').textContent=currentUser?currentUser.username+' · '+currentUser.role:'';$('#app').classList.toggle('role-viewer',currentUser?.role==='viewer');$('#app').classList.toggle('role-operator',currentUser?.role==='operator');$('#user-management').hidden=currentUser?.role!=='admin';}
 function note(s){const n=$('#notice');n.textContent=s;n.style.display='block';setTimeout(()=>n.style.display='none',3200)}
+async function checkFirstRunSetup(){
+  if(setupPromptChecked||currentUser?.role!=='admin')return;
+  const state=await api('/setup/status');
+  setupPromptChecked=true;
+  if(state.completed)return;
+  $('#setup-asterisk-state').textContent=state.asterisk==='online'?'Asterisk is online':'Asterisk needs attention';
+  $('#setup-extension-count').textContent=state.extensions_count+' extension'+(state.extensions_count===1?'':'s')+' configured';
+  $('#first-run-setup').hidden=false;
+}
 function cookie(n){return document.cookie.split('; ').find(x=>x.startsWith(n+'='))?.split('=').slice(1).join('=')||''}
 function secret(s){$('#secret-value').textContent=s;$('#secret-dialog').showModal()}
 function queryForCalls(){const p=new URLSearchParams({limit:String(callPageSize),offset:String(callOffset)});for(const [k,v] of Object.entries(callFilters))if(v)p.set(k,v);return p.toString()}
@@ -335,7 +345,7 @@ $('#export-calls').onclick=async()=>{
     a.href=url;a.download='tomos-call-history.csv';document.body.append(a);a.click();a.remove();URL.revokeObjectURL(url)
   }catch(err){note(err.message)}
 };
-$('#login-form').onsubmit=async e=>{e.preventDefault();try{const result=await api('/auth/login',{method:'POST',body:JSON.stringify({username:$('#username').value,password:$('#password').value})});currentUser=result.user;csrf=cookie('tomos_csrf');showApp();await refresh()}catch(err){$('#login-error').textContent=err.message}};
+$('#login-form').onsubmit=async e=>{e.preventDefault();try{const result=await api('/auth/login',{method:'POST',body:JSON.stringify({username:$('#username').value,password:$('#password').value})});currentUser=result.user;csrf=cookie('tomos_csrf');setupPromptChecked=false;showApp();await refresh();await checkFirstRunSetup()}catch(err){$('#login-error').textContent=err.message}};
 $('#logout').onclick=async()=>{try{await api('/auth/logout',{method:'POST'})}finally{csrf='';currentUser=null;$('#change-password').hidden=true;$('#current-user').textContent='';showLogin()}};
 $('#change-password').onclick=()=>$('#own-password-dialog').showModal();
 $('#own-password-form').onsubmit=async e=>{e.preventDefault();try{await api('/auth/password',{method:'POST',body:JSON.stringify({old_password:$('#own-old-password').value,new_password:$('#own-new-password').value})});$('#own-password-dialog').close();$('#own-password-form').reset();note('Your password has been changed')}catch(err){note(err.message)}};
@@ -401,7 +411,15 @@ $('#create-form').onsubmit=async e=>{
   }catch(err){note(err.message)}
   finally{button.disabled=false}
 };
+$('#setup-add-phone').onclick=()=>$('#new-extension').click();
+$('#setup-later').onclick=()=>{$('#first-run-setup').hidden=true;note('Setup reminder saved for your next sign-in')};
+$('#setup-complete').onclick=async()=>{
+  const button=$('#setup-complete');button.disabled=true;
+  try{await api('/setup/complete',{method:'POST'});$('#first-run-setup').hidden=true;note('First-run setup completed. You can manage phones and extensions any time.')}
+  catch(error){note(error.message)}
+  finally{button.disabled=false}
+};
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>b.closest('dialog').close());
 $('#copy-secret').onclick=async()=>{await navigator.clipboard.writeText($('#secret-value').textContent);note('Password copied')};
-(async()=>{const r=await fetch('/api/v1/auth/session'),d=await r.json();if(d.authenticated){currentUser=d.user;csrf=cookie('tomos_csrf');showApp();try{await refresh()}catch(e){note(e.message)}}else showLogin()})();
+(async()=>{const r=await fetch('/api/v1/auth/session'),d=await r.json();if(d.authenticated){currentUser=d.user;csrf=cookie('tomos_csrf');showApp();try{await refresh();await checkFirstRunSetup()}catch(e){note(e.message)}}else showLogin()})();
 setInterval(()=>{if(!$('#app').hidden)refresh().catch(e=>note(e.message))},15000);
