@@ -80,7 +80,10 @@ def render_pjsip(extensions: list[tuple[str, str]],
 
 def render_dialplan(extensions: list[tuple[str, str]],
                     sccp_extensions: list[str] | None = None,
-                    webrtc_extensions: list[str] | None = None) -> str:
+                    webrtc_extensions: list[str] | None = None,
+                    country_code: str = "GB") -> str:
+    if country_code not in {"GB", "INTL"}:
+        raise ValueError("country_code must be GB or INTL")
     sip_numbers = {number for number, _ in extensions}
     sccp_numbers = set(sccp_extensions or [])
     browser_numbers = set(webrtc_extensions or [])
@@ -91,6 +94,34 @@ def render_dialplan(extensions: list[tuple[str, str]],
         "exten => *65,1,Answer()", " same => n,Playback(demo-echotest)",
         " same => n,Echo()", " same => n,Hangup()",
     ]
+    if country_code == "GB":
+        lines.extend([
+            "; UK national and international number recognition.",
+            "; Outbound calls are deliberately blocked until a SIP trunk is configured.",
+            "include => tomos-country-outbound",
+            "",
+            "[tomos-country-outbound]",
+            "exten => 999,1,NoOp(UK emergency call blocked: no emergency-capable trunk configured)",
+            " same => n,Playback(all-circuits-busy-now)",
+            " same => n,Hangup()",
+            "exten => 112,1,NoOp(UK emergency call blocked: no emergency-capable trunk configured)",
+            " same => n,Playback(all-circuits-busy-now)",
+            " same => n,Hangup()",
+            "exten => _0[1-9]X.,1,NoOp(UK national number normalisation)",
+            " same => n,Set(TOMOS_E164=+44${EXTEN:1})",
+            " same => n,NoOp(Normalised destination: ${TOMOS_E164})",
+            " same => n,Playback(all-circuits-busy-now)",
+            " same => n,Hangup()",
+            "exten => _00X.,1,NoOp(International number normalisation)",
+            " same => n,Set(TOMOS_E164=+${EXTEN:2})",
+            " same => n,NoOp(Normalised destination: ${TOMOS_E164})",
+            " same => n,Playback(all-circuits-busy-now)",
+            " same => n,Hangup()",
+            "",
+        ])
+    else:
+        lines.append("; International/manual profile selected: no country-specific outbound patterns are enabled.")
+
     for number in sorted(numbers):
         targets = []
         if number in sip_numbers:
@@ -115,6 +146,8 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--extension", action="append", type=parse_extension, required=True)
     parser.add_argument("--webrtc-extension", action="append", type=parse_extension, default=[])
+    parser.add_argument("--country-code", choices=("GB", "INTL"), default="GB",
+                        help="Country numbering profile (default: GB)")
     args = parser.parse_args()
     numbers = [number for number, _ in args.extension]
     browser_numbers = [number for number, _ in args.webrtc_extension]
@@ -123,7 +156,9 @@ def main() -> int:
     if not set(browser_numbers).issubset(set(numbers)):
         parser.error("every WebRTC identity must belong to an enabled SIP extension")
     atomic_write(args.output_dir / "pjsip.conf", render_pjsip(args.extension, args.webrtc_extension))
-    atomic_write(args.output_dir / "extensions.conf", render_dialplan(args.extension, webrtc_extensions=browser_numbers))
+    atomic_write(args.output_dir / "extensions.conf", render_dialplan(
+        args.extension, webrtc_extensions=browser_numbers, country_code=args.country_code
+    ))
     return 0
 
 if __name__ == "__main__":
