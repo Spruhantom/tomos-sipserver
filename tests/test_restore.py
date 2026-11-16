@@ -9,6 +9,13 @@ from tomos_sipserver import restore
 
 
 class RestoreTests(unittest.TestCase):
+    def setUp(self):
+        self._real_geteuid = os.geteuid
+        restore.os.geteuid = lambda: 0
+
+    def tearDown(self):
+        restore.os.geteuid = self._real_geteuid
+
     def _backup(self, directory: Path) -> Path:
         import hashlib, io, json, tarfile
         db = directory / "extensions.db"
