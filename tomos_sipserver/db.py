@@ -39,6 +39,7 @@ def initialize_database(path: str | Path = DEFAULT_DB) -> None:
                 extension TEXT PRIMARY KEY,
                 display_name TEXT NOT NULL,
                 password TEXT NOT NULL,
+                webrtc_password TEXT,
                 protocol TEXT NOT NULL DEFAULT 'sip' CHECK (protocol IN ('sip', 'sccp')),
                 enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
                 created_at TEXT NOT NULL,
@@ -49,6 +50,14 @@ def initialize_database(path: str | Path = DEFAULT_DB) -> None:
         extension_columns = {row["name"] for row in connection.execute("PRAGMA table_info(extensions)")}
         if "protocol" not in extension_columns:
             connection.execute("ALTER TABLE extensions ADD COLUMN protocol TEXT NOT NULL DEFAULT 'sip' CHECK (protocol IN ('sip', 'sccp'))")
+        if "webrtc_password" not in extension_columns:
+            connection.execute("ALTER TABLE extensions ADD COLUMN webrtc_password TEXT")
+        # Give existing SIP extensions an independent browser credential. The
+        # legacy desk-phone password is never reused for WebRTC registration.
+        import secrets
+        for row in connection.execute("SELECT extension FROM extensions WHERE protocol = 'sip' AND (webrtc_password IS NULL OR webrtc_password = '')").fetchall():
+            connection.execute("UPDATE extensions SET webrtc_password = ? WHERE extension = ?",
+                               (secrets.token_urlsafe(32), row["extension"]))
         connection.execute("CREATE INDEX IF NOT EXISTS extensions_enabled_idx ON extensions(enabled)")
         connection.execute("CREATE INDEX IF NOT EXISTS extensions_protocol_enabled_idx ON extensions(protocol, enabled)")
         connection.execute("""
@@ -147,8 +156,8 @@ def seed_extensions(path: str | Path, extensions: list[tuple[str, str]]) -> None
             if not EXTENSION_RE.fullmatch(number) or not SECRET_RE.fullmatch(secret):
                 raise ValueError("Invalid extension number or SIP password")
             connection.execute(
-                "INSERT OR IGNORE INTO extensions(extension, display_name, password, enabled, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)",
-                (number, f"Extension {number}", secret, now, now),
+                "INSERT OR IGNORE INTO extensions(extension, display_name, password, webrtc_password, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)",
+                (number, f"Extension {number}", secret, __import__("secrets").token_urlsafe(32), now, now),
             )
 
 
