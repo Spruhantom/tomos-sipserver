@@ -11,3 +11,13 @@
 .audit-head p{margin:.25rem 0 0;color:var(--muted,#687386);font-size:.9rem}
 #audit-events td{font-size:.88rem;vertical-align:top}
 #audit-events td:last-child{max-width:22rem;overflow-wrap:anywhere}
+
+#create-dialog{width:min(520px,calc(100% - 32px))}
+#create-dialog select{display:block;width:100%;padding:13px;margin-top:8px;border:1px solid #3a4b64;border-radius:9px;background:#0b1424;color:white;font:inherit}
+#sccp-fields{padding:12px 14px;margin:12px 0;border:1px solid #31445e;border-radius:10px;background:#0d1728}
+#sccp-fields[hidden]{display:none}
+#sccp-fields .hint{font-size:12px;line-height:1.5}
+#cisco-devices td{vertical-align:middle}
+#cisco-devices td:nth-child(6){color:#9db2cd;font-size:12px}
+.role-viewer #cisco-devices button{display:none}
+@media(max-width:560px){#create-dialog{padding:18px}#create-dialog .actions{align-items:stretch;flex-direction:column}#create-dialog .actions button{width:100%}}
