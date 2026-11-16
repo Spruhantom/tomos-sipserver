@@ -19,6 +19,8 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 DEFAULT_DEST = Path("/var/backups/tomos-sipserver")
 FILES = {
     "extensions.db": Path("/var/lib/tomos-sipserver/extensions.db"),
