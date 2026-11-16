@@ -722,7 +722,7 @@ def create_app(
         display_name = payload.display_name.strip()
         if not display_name:
             raise HTTPException(status_code=422, detail="display_name cannot be blank")
-        if payload.protocol == "sccp" and not re.fullmatch(r"^[A-Za-z0-9][A-Za-z0-9 ._()\\-]{0,63}$", display_name):
+        if payload.protocol == "sccp" and not re.fullmatch(r"^[A-Za-z0-9][A-Za-z0-9 ._()\-]{0,63}$", display_name):
             raise HTTPException(status_code=422, detail="SCCP display names must use letters, numbers, spaces, dots, underscores, parentheses or hyphens")
         password = payload.password or secrets.token_urlsafe(32)
         now = _utc_now()
