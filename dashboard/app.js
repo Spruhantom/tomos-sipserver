@@ -455,7 +455,7 @@ async function connectWebPhone(){
     webPhoneStatus('Connection failed');
     webPhoneControls(false,false);
     note('Browser phone: '+(error.message||'connection failed'));
-  }finally{button.disabled=false}
+  }finally{button.disabled=Boolean(webPhoneUa)}
 }
 async function disconnectWebPhone(){
   try{
@@ -524,7 +524,7 @@ $('#webphone-mute').onclick=()=>{
 };
 
 $('#login-form').onsubmit=async e=>{e.preventDefault();try{const result=await api('/auth/login',{method:'POST',body:JSON.stringify({username:$('#username').value,password:$('#password').value})});currentUser=result.user;csrf=cookie('tomos_csrf');setupPromptChecked=false;showApp();await refresh();await checkFirstRunSetup()}catch(err){$('#login-error').textContent=err.message}};
-$('#logout').onclick=async()=>{try{await api('/auth/logout',{method:'POST'})}finally{csrf='';currentUser=null;$('#change-password').hidden=true;$('#current-user').textContent='';showLogin()}};
+$('#logout').onclick=async()=>{try{await api('/auth/logout',{method:'POST'})}finally{await disconnectWebPhone();csrf='';currentUser=null;$('#change-password').hidden=true;$('#current-user').textContent='';showLogin()}};
 $('#change-password').onclick=()=>$('#own-password-dialog').showModal();
 $('#own-password-form').onsubmit=async e=>{e.preventDefault();try{await api('/auth/password',{method:'POST',body:JSON.stringify({old_password:$('#own-old-password').value,new_password:$('#own-new-password').value})});$('#own-password-dialog').close();$('#own-password-form').reset();note('Your password has been changed')}catch(err){note(err.message)}};
 async function loadUsers(){
