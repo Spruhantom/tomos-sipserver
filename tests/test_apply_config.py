@@ -20,10 +20,10 @@ class ApplyConfigTests(unittest.TestCase):
         self.config.mkdir()
         self.renderer = Path(__file__).resolve().parents[1] / "scripts" / "render-config.py"
         with sqlite3.connect(self.db) as connection:
-            connection.execute("CREATE TABLE extensions (extension TEXT, password TEXT, enabled INTEGER, display_name TEXT, protocol TEXT NOT NULL DEFAULT 'sip')")
+            connection.execute("CREATE TABLE extensions (extension TEXT, password TEXT, webrtc_password TEXT, enabled INTEGER, display_name TEXT, protocol TEXT NOT NULL DEFAULT 'sip')")
             connection.executemany(
-                "INSERT INTO extensions VALUES (?, ?, ?, ?, ?)",
-                [("100", "a" * 32, 1, "Front Desk", "sccp"), ("101", "b" * 32, 0, "Disabled", "sip"), ("102", "c" * 32, 1, "Reception", "sccp"), ("103", "d" * 32, 1, "Legacy dual", "sip")],
+                "INSERT INTO extensions VALUES (?, ?, ?, ?, ?, ?)",
+                [("100", "a" * 32, None, 1, "Front Desk", "sccp"), ("101", "b" * 32, None, 0, "Disabled", "sip"), ("102", "c" * 32, None, 1, "Reception", "sccp"), ("103", "d" * 32, "w" * 32, 1, "Legacy dual", "sip")],
             )
             connection.execute(
                 """CREATE TABLE cisco_devices (
@@ -73,10 +73,12 @@ class ApplyConfigTests(unittest.TestCase):
         self.assertNotIn("[102]", pjsip)
         self.assertNotIn("[101]", pjsip)
         self.assertIn("[103]", pjsip)
+        self.assertIn("[webrtc-103]", pjsip)
+        self.assertIn("username=103-web", pjsip)
         self.assertIn("exten => 100,1", dialplan)
         self.assertIn("Dial(SCCP/100,30)", dialplan)
         self.assertIn("Dial(SCCP/102,30)", dialplan)
-        self.assertIn("Dial(PJSIP/103&SCCP/103,30)", dialplan)
+        self.assertIn("Dial(PJSIP/103&SCCP/103&PJSIP/webrtc-103,30)", dialplan)
         self.assertNotIn("exten => 101,1", dialplan)
         self.assertIn("[SEP001565AABBCC]", sccp)
         self.assertIn("[SEP001565AABBEE]", sccp)
