@@ -4,7 +4,7 @@ A self-hosted home telephone system for Debian 13, built around Asterisk with a 
 
 ## Current status
 
-The Debian 13 Asterisk foundation passes CI; CI now also builds and integration-checks the initial Cisco SCCP driver. The installer builds Asterisk 22 LTS and the pinned AI3I/chan_sccp driver, while retaining PJSIP for ordinary SIP phones. The repository includes an authenticated FastAPI extension-management API, SQLite persistence, a privileged configuration-apply helper and systemd units. The dashboard provides extension management, live registration status, call history and Yealink, Grandstream, Polycom and Cisco provisioning workflows. Extensions now have an explicit SIP/PJSIP or Cisco SCCP protocol; PJSIP endpoints and SCCP line/device configuration are generated separately. Existing Cisco assignments retain their previous dual-protocol behaviour during upgrade. Cisco SCCP inventory generates separate SEP profile families: the 7940/7960 family shares the legacy profile structure, while the 7970 uses the distinct 797x full-configuration structure from the pinned chan_sccp templates. The API exposes a model compatibility catalogue and explicitly reports firmware validation and physical handset testing as outstanding. Physical Cisco handset and firmware compatibility remain unverified. Asterisk writes call-detail records to a separate local SQLite database; call audio is not recorded.
+The Debian 13 Asterisk foundation passes CI; CI now also builds and integration-checks the initial Cisco SCCP driver. The installer builds Asterisk 22 LTS and the pinned AI3I/chan_sccp driver, while retaining PJSIP for ordinary SIP phones. The repository includes an authenticated FastAPI extension-management API, SQLite persistence, a privileged configuration-apply helper and systemd units. The dashboard provides extension management, live registration status, call history, vendor provisioning and an SIP.js browser phone for internal calls over WSS with DTLS-SRTP media. Extensions now have an explicit SIP/PJSIP or Cisco SCCP protocol; PJSIP endpoints and SCCP line/device configuration are generated separately. Existing Cisco assignments retain their previous dual-protocol behaviour during upgrade. Cisco SCCP inventory generates separate SEP profile families: the 7940/7960 family shares the legacy profile structure, while the 7970 uses the distinct 797x full-configuration structure from the pinned chan_sccp templates. The API exposes a model compatibility catalogue and explicitly reports firmware validation and physical handset testing as outstanding. Physical Cisco handset and firmware compatibility remain unverified. Asterisk writes call-detail records to a separate local SQLite database; call audio is not recorded.
 
 ## Install (Debian 13 only)
 
@@ -87,6 +87,27 @@ The dashboard is served at `http://127.0.0.1:8000/`. On the first install, sign 
 
 Each mutation regenerates PJSIP and dialplan configuration and requests an Asterisk reload. If configuration application fails, the API restores the previous database state and returns an error. The API runs as the unprivileged `tomos` user; a fixed-purpose root helper is allowed through one sudoers command only.
 
+## Browser phone (SIP.js and WebRTC)
+
+The dashboard includes a browser softphone for enabled SIP/PJSIP extensions. Each SIP extension receives a separate random WebRTC authentication secret; the normal desk-phone SIP password is not reused. The authenticated WebRTC configuration endpoint returns that browser secret with `Cache-Control: no-store` and denies read-only viewer accounts.
+
+The browser phone:
+- Loads the pinned SIP.js 0.21.2 module and registers over secure WebSockets (WSS) to Asterisk at `wss://PBX-HOST:8089/ws`.
+- Uses a dedicated `<extension>-web` PJSIP identity, so existing UDP desk phones keep their normal RTP/SIP profile.
+- Uses WebRTC DTLS-SRTP, ICE, RTCP mux and audio-only media. Microphone permission is requested by the browser when a call is answered or placed.
+- Rings alongside the regular SIP phone when another internal extension calls it. Browser-to-extension calls use the existing internal dialplan.
+- Provides connect/register, incoming-call answer/decline, outgoing internal extension dialling, mute and hang-up controls.
+
+### TLS and network requirements
+
+Browser calling requires the dashboard itself to be opened over HTTPS and the Asterisk WSS certificate to be trusted by the browser. The installer creates a short-lived self-signed bootstrap certificate at `/etc/asterisk/keys/asterisk.crt` and `/etc/asterisk/keys/asterisk.key`; this allows the TLS listener to start, but browsers will reject it until it is replaced with a certificate issued for the PBX hostname by a trusted certificate authority. Install the certificate and private key at those paths, set ownership to `root:asterisk` (certificate mode 0644, key mode 0640), then restart Asterisk.
+
+The default browser signalling URL is `wss://<dashboard-host>:8089/ws`. If the PBX signalling hostname differs from the dashboard hostname, set `TOMOS_SIP_DOMAIN` and `TOMOS_WSS_URL` in `/etc/tomos-sipserver/api.env`, then restart `tomos-sipserver-api.service`. `TOMOS_WSS_URL` must end in `/ws` and use `wss://`.
+
+Allow the WSS TCP port 8089 and the configured RTP UDP range (default 10000-20000) only on the trusted voice LAN or VPN. Keep the existing SIP UDP 5060 and SCCP TCP 2000 restrictions. Do not expose the PBX directly to the public internet or add router port forwarding. Remote browser calling requires a properly configured VPN/reverse-proxy and media path; HTTPS for the dashboard alone does not make RTP reachable.
+
+Calls currently support internal extensions only. No SIP trunk or external telephone service is provisioned, and emergency calling is not provided by this browser feature. Physical browser-to-phone two-way audio still needs end-to-end testing on the target network and browsers.
+
 ## Technology
 
 | Layer | Technology |
@@ -97,7 +118,7 @@ Each mutation regenerates PJSIP and dialplan configuration and requests an Aster
 | API | Python / FastAPI |
 | Database | SQLite |
 | Web dashboard | HTML / CSS / JavaScript |
-| Planned browser calling | SIP.js, WebRTC and secure WebSockets |
+| Browser calling | SIP.js, WebRTC, WSS and DTLS-SRTP |
 | Service supervision | systemd |
 
 ## Security defaults
@@ -117,7 +138,7 @@ Each mutation regenerates PJSIP and dialplan configuration and requests an Aster
 2. **Extension API (current):** authenticated FastAPI CRUD, SQLite persistence, password rotation, enable/disable and configuration rollback.
 3. **Dashboard:** responsive authenticated web UI with SIP/PJSIP and Cisco SCCP extension creation, Cisco model/MAC/host assignment, extension enable/disable/delete, SIP password reset, vendor SIP provisioning, registration status, call history and CSV export. Multi-user account management includes administrator, operator and read-only roles, PBKDF2 password hashes, account enable/disable, password resets, self-service password changes, last-admin safeguards and an administrator audit panel.
 4. **Vendor provisioning (in progress):** Yealink, Grandstream and Polycom MAC-specific provisioning workflows are implemented with per-device credentials. Cisco SCCP driver, device inventory, chan_sccp device/line sections and model-specific `SEP<MAC>.cnf.xml` profile families are integrated. The 7940/7960 and 7970 renderers are checked separately in CI. Configure a restricted TFTP service on the voice LAN and verify the exact handset firmware and physical devices before claiming hardware compatibility.
-5. Browser phone: SIP.js, WSS, SRTP and persistent in-dashboard call controls.
+5. **Browser phone (implemented, integration validation in progress):** SIP.js registration over WSS, dedicated per-extension WebRTC identities, DTLS-SRTP, incoming/outgoing internal calls, mute and hang-up controls. Requires a browser-trusted PBX certificate and LAN/VPN media connectivity.
 6. Home features: voicemail, call history, groups, forwarding, DND, backups and restore.
 7. Hardening/release: security review, hardware compatibility matrix and upgrade testing.
 
