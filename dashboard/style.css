@@ -26,14 +26,14 @@
 .first-run-setup .eyebrow{margin:0 0 6px}
 .first-run-setup .section-head h2{margin:0 0 6px}
 .setup-step{font-size:12px;color:#9db7d8;border:1px solid #405b7e;border-radius:20px;padding:6px 10px;white-space:nowrap}
-.setup-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:18px}
+.setup-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:18px}
 .setup-card{min-width:0;padding:16px;border:1px solid #31445e;border-radius:12px;background:#0c1728}
 .setup-card h3{margin:8px 0;font-size:16px}
 .setup-card p{font-size:13px;line-height:1.55;color:#aebed1;min-height:60px}
 .setup-card strong{display:block;font-size:12px;color:#a9c8f0;margin:10px 0}
 .setup-number{font-size:12px;font-weight:700;color:#70a9f5}
 .setup-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
-@media(max-width:760px){.setup-grid{grid-template-columns:1fr}.setup-card p{min-height:0}.setup-actions{flex-direction:column-reverse}.setup-actions button{width:100%}}
+@media(max-width:1050px){.setup-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:760px){.setup-grid{grid-template-columns:1fr}.setup-card p{min-height:0}.setup-actions{flex-direction:column-reverse}.setup-actions button{width:100%}}
 
 .webphone-panel{margin:22px 0;border-color:#365b80}
 .webphone-panel .section-head p{margin:.3rem 0}
@@ -53,3 +53,6 @@
 .role-viewer #webphone-panel{display:none}
 @media(max-width:760px){.webphone-grid{grid-template-columns:1fr 1fr}.webphone-grid label{grid-column:span 2}.webphone-grid button{width:100%}.incoming-call{align-items:flex-start;flex-direction:column}.incoming-call .actions{width:100%}.incoming-call .actions button{flex:1}}
 @media(max-width:460px){.webphone-grid{grid-template-columns:1fr}.webphone-grid label{grid-column:auto}.webphone-actions{align-items:stretch;flex-direction:column}.webphone-actions button{width:100%}.webphone-actions strong{margin:0}}
+
+#telephony-settings-form{grid-template-columns:minmax(220px,1fr) auto;max-width:640px}
+@media(max-width:760px){#telephony-settings-form{grid-template-columns:1fr}}
