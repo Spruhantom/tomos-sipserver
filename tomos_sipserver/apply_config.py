@@ -48,7 +48,8 @@ def apply(reload_asterisk: bool = True) -> None:
                FROM cisco_devices d JOIN extensions e ON e.extension = d.extension
                WHERE e.enabled = 1 ORDER BY d.mac"""
         ).fetchall()
-    extensions = [(str(row[0]), str(row[1])) for row in rows]\n    webrtc_extensions = [(str(row[0]), str(row[2])) for row in rows if row[2]]\n    webrtc_numbers = [number for number, _ in webrtc_extensions]
+    extensions = [(str(row[0]), str(row[1])) for row in rows]
+    webrtc_extensions = [(str(row[0]), str(row[2])) for row in rows if row[2]]\n    webrtc_numbers = [number for number, _ in webrtc_extensions]
     sccp_extensions = sorted({str(row[3]) for row in cisco_rows})
     cisco_configs = {
         str(mac): (
