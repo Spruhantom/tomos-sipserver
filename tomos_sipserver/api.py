@@ -56,6 +56,7 @@ class UserUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     role: str | None = Field(default=None, pattern=r"^(admin|operator|viewer)$")
     enabled: bool | None = None
+    assigned_extension: str | None = Field(default=None, pattern=EXTENSION_PATTERN)
 
 class PasswordChange(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -304,7 +305,7 @@ def create_app(
                 if not header or not cookie or not hmac.compare_digest(header, csrf) or not hmac.compare_digest(cookie, csrf):
                     return None
             with connect(db_path) as connection:
-                row = connection.execute("SELECT id, username, role, enabled FROM admin_users WHERE id = ?", (int(user_id_text),)).fetchone()
+                row = connection.execute("SELECT id, username, role, enabled, assigned_extension FROM admin_users WHERE id = ?", (int(user_id_text),)).fetchone()
             if row is None or not row["enabled"]:
                 return None
             return {"id": row["id"], "username": row["username"], "role": row["role"]}
@@ -424,8 +425,8 @@ def create_app(
     @app.get("/api/v1/users", tags=["user management"])
     def list_users(principal: dict = Depends(require_admin)):
         with connect(db_path) as connection:
-            rows = connection.execute("SELECT id, username, role, enabled, created_at, updated_at FROM admin_users ORDER BY username COLLATE NOCASE").fetchall()
-        return [{"id": row["id"], "username": row["username"], "role": row["role"], "enabled": bool(row["enabled"]), "created_at": row["created_at"], "updated_at": row["updated_at"]} for row in rows]
+            rows = connection.execute("SELECT id, username, role, enabled, assigned_extension, created_at, updated_at FROM admin_users ORDER BY username COLLATE NOCASE").fetchall()
+        return [{"id": row["id"], "username": row["username"], "role": row["role"], "enabled": bool(row["enabled"]), "assigned_extension": row["assigned_extension"], "created_at": row["created_at"], "updated_at": row["updated_at"]} for row in rows]
 
     @app.post("/api/v1/users", status_code=status.HTTP_201_CREATED, tags=["user management"])
     def create_user(payload: UserCreate, principal: dict = Depends(require_admin)):
@@ -443,10 +444,10 @@ def create_app(
     @app.patch("/api/v1/users/{user_id}", tags=["user management"])
     def update_user(user_id: int, payload: UserUpdate, principal: dict = Depends(require_admin)):
         changes = payload.model_dump(exclude_unset=True)
-        if not changes or any(value is None for value in changes.values()):
-            raise HTTPException(status_code=422, detail="Provide a non-null role or enabled value")
+        if not changes or any(value is None for key, value in changes.items() if key != "assigned_extension"):
+            raise HTTPException(status_code=422, detail="Provide a role, enabled state or assigned extension")
         with connect(db_path) as connection:
-            target = connection.execute("SELECT id, username, role, enabled FROM admin_users WHERE id = ?", (user_id,)).fetchone()
+            target = connection.execute("SELECT id, username, role, enabled, assigned_extension FROM admin_users WHERE id = ?", (user_id,)).fetchone()
             if target is None:
                 raise HTTPException(status_code=404, detail="User not found")
             next_role = changes.get("role", target["role"])
@@ -455,7 +456,26 @@ def create_app(
                 remaining = connection.execute("SELECT COUNT(*) FROM admin_users WHERE role = ? AND enabled = 1 AND id != ?", ("admin", user_id)).fetchone()[0]
                 if remaining == 0:
                     raise HTTPException(status_code=409, detail="Cannot disable or demote the last active administrator")
-            connection.execute("UPDATE admin_users SET role = ?, enabled = ?, updated_at = ? WHERE id = ?", (next_role, int(next_enabled), _utc_now(), user_id))
+            next_extension = changes.get("assigned_extension", target["assigned_extension"])
+            if next_extension is not None:
+                extension_row = connection.execute(
+                    "SELECT protocol, enabled FROM extensions WHERE extension = ?", (next_extension,)
+                ).fetchone()
+                if extension_row is None or extension_row["protocol"] != "sip" or not extension_row["enabled"]:
+                    raise HTTPException(status_code=409, detail="Only an enabled SIP/PJSIP extension can be assigned to a user")
+                assigned_elsewhere = connection.execute(
+                    "SELECT username FROM admin_users WHERE assigned_extension = ? AND id != ?",
+                    (next_extension, user_id),
+                ).fetchone()
+                if assigned_elsewhere:
+                    raise HTTPException(status_code=409, detail="This extension is already assigned to another user")
+            connection.execute(
+                "UPDATE admin_users SET role = ?, enabled = ?, assigned_extension = ?, updated_at = ? WHERE id = ?",
+                (next_role, int(next_enabled), next_extension, _utc_now(), user_id),
+            )
+            if next_extension != target["assigned_extension"]:
+                _record_audit(connection, principal, "user.extension_assigned", user_id, target["username"],
+                              {"from": target["assigned_extension"], "to": next_extension})
             if next_role != target["role"]:
                 _record_audit(connection, principal, "user.role_changed", user_id, target["username"],
                               {"from": target["role"], "to": next_role})
@@ -464,7 +484,7 @@ def create_app(
                               user_id, target["username"],
                               {"from": bool(target["enabled"]), "to": bool(next_enabled)})
             row = connection.execute("SELECT id, username, role, enabled FROM admin_users WHERE id = ?", (user_id,)).fetchone()
-        return {"id": row["id"], "username": row["username"], "role": row["role"], "enabled": bool(row["enabled"])}
+        return {"id": row["id"], "username": row["username"], "role": row["role"], "enabled": bool(row["enabled"]), "assigned_extension": row["assigned_extension"]}
 
     @app.delete("/api/v1/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["user management"])
     def delete_user(user_id: int, principal: dict = Depends(require_admin)):
@@ -1175,6 +1195,27 @@ def create_app(
             "outbound_proxy": None,
             "password_included": False,
         }
+
+    @app.get("/api/v1/me/webphone", tags=["WebRTC"])
+    def my_webphone(request: Request, principal: dict = Depends(require_token)):
+        """Return only the browser phone assigned to the authenticated dashboard user."""
+        if principal.get("id") is None:
+            raise HTTPException(status_code=403, detail="A personal dashboard login is required")
+        with connect(db_path) as connection:
+            row = connection.execute(
+                """SELECT u.assigned_extension, u.enabled AS user_enabled,
+                          e.protocol, e.enabled AS extension_enabled
+                   FROM admin_users u LEFT JOIN extensions e ON e.extension = u.assigned_extension
+                   WHERE u.id = ?""", (principal["id"],)
+            ).fetchone()
+        if row is None or not row["user_enabled"]:
+            raise HTTPException(status_code=401, detail="Dashboard account is unavailable")
+        if not row["assigned_extension"]:
+            return {"assigned": False, "extension": None}
+        if row["protocol"] != "sip" or not row["extension_enabled"]:
+            return {"assigned": False, "extension": None}
+        config = extension_webrtc_config(row["assigned_extension"], request, principal)
+        return {"assigned": True, "extension": row["assigned_extension"], "phone": json.loads(config.body)}
 
     @app.get("/api/v1/extensions/{extension}/webrtc", tags=["WebRTC"])
     def extension_webrtc_config(extension: str, request: Request,
