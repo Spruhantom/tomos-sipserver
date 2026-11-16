@@ -14,6 +14,8 @@ from .cisco import render_phone_xml, render_sccp_config
 
 APP_DIR = Path(__file__).resolve().parent.parent
 RENDERER_PATH = APP_DIR / "render-config.py"
+if not RENDERER_PATH.is_file():
+    RENDERER_PATH = APP_DIR / "scripts" / "render-config.py"
 DB_PATH = Path("/var/lib/tomos-sipserver/extensions.db")
 CONFIG_DIR = Path("/etc/asterisk")
 SCCP_CONFIG_PATH = CONFIG_DIR / "tomos-sccp-devices.conf"
