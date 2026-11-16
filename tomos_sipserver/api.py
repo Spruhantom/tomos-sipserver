@@ -71,6 +71,7 @@ class ExtensionCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     extension: str = Field(pattern=EXTENSION_PATTERN)
     display_name: str = Field(min_length=1, max_length=64)
+    protocol: str = Field(default="sip", pattern=r"^(sip|sccp)$")
     password: str | None = Field(default=None, pattern=PASSWORD_PATTERN)
 
 
@@ -83,6 +84,7 @@ class ExtensionUpdate(BaseModel):
 class ExtensionView(BaseModel):
     extension: str
     display_name: str
+    protocol: str
     enabled: bool
     created_at: str
     updated_at: str
@@ -145,6 +147,7 @@ def _view(row: sqlite3.Row) -> dict:
     return {
         "extension": row["extension"],
         "display_name": row["display_name"],
+        "protocol": row["protocol"],
         "enabled": bool(row["enabled"]),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -583,12 +586,14 @@ def create_app(
         now = _utc_now()
         with connect(db_path) as connection:
             extension_row = connection.execute(
-                "SELECT enabled FROM extensions WHERE extension = ?", (payload.extension,)
+                "SELECT enabled, protocol FROM extensions WHERE extension = ?", (payload.extension,)
             ).fetchone()
             if extension_row is None:
                 raise HTTPException(status_code=404, detail="Extension not found")
             if not extension_row["enabled"]:
                 raise HTTPException(status_code=409, detail="Enable the SIP extension before provisioning a phone")
+            if extension_row["protocol"] != "sip":
+                raise HTTPException(status_code=409, detail="This extension uses SCCP, not SIP provisioning")
             try:
                 connection.execute(
                     """INSERT INTO polycom_devices
@@ -722,12 +727,16 @@ def create_app(
         def operation(connection):
             try:
                 connection.execute(
-                    "INSERT INTO extensions(extension, display_name, password, enabled, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)",
-                    (payload.extension, display_name, password, now, now),
+                    "INSERT INTO extensions(extension, display_name, password, protocol, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)",
+                    (payload.extension, display_name, password, payload.protocol, now, now),
                 )
             except sqlite3.IntegrityError as error:
                 raise HTTPException(status_code=409, detail="Extension already exists") from error
-            return {"extension": payload.extension, "display_name": display_name, "enabled": True, "sip_password": password}
+            result = {"extension": payload.extension, "display_name": display_name,
+                      "protocol": payload.protocol, "enabled": True}
+            if payload.protocol == "sip":
+                result["sip_password"] = password
+            return result
         return mutate(operation)
 
 
@@ -755,7 +764,9 @@ def create_app(
             if extension_row is None:
                 raise HTTPException(status_code=404, detail="Extension not found")
             if not extension_row["enabled"]:
-                raise HTTPException(status_code=409, detail="Enable the SIP extension before assigning a Cisco phone")
+                raise HTTPException(status_code=409, detail="Enable the SCCP extension before assigning a Cisco phone")
+            if extension_row["protocol"] != "sccp":
+                raise HTTPException(status_code=409, detail="Cisco SCCP handsets require an SCCP extension")
             try:
                 connection.execute(
                     """INSERT INTO cisco_devices (mac, extension, model, server_host, created_at)
@@ -1109,11 +1120,13 @@ def create_app(
             raise HTTPException(status_code=422, detail="Invalid extension number")
         with connect(db_path) as connection:
             row = connection.execute(
-                "SELECT extension, display_name, enabled FROM extensions WHERE extension = ?",
+                "SELECT extension, display_name, enabled, protocol FROM extensions WHERE extension = ?",
                 (extension,),
             ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Extension not found")
+        if row["protocol"] != "sip":
+            raise HTTPException(status_code=409, detail="SIP settings are unavailable for an SCCP extension")
         return {
             "extension": row["extension"],
             "display_name": row["display_name"],
