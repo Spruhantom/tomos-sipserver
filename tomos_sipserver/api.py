@@ -1300,6 +1300,8 @@ def create_app(
         if not re.fullmatch(EXTENSION_PATTERN, extension):
             raise HTTPException(status_code=422, detail="Invalid extension number")
         def operation(connection):
+            connection.execute("UPDATE admin_users SET assigned_extension = NULL, updated_at = ? WHERE assigned_extension = ?",
+                               (_utc_now(), extension))
             cursor = connection.execute("DELETE FROM extensions WHERE extension = ?", (extension,))
             if cursor.rowcount == 0:
                 raise HTTPException(status_code=404, detail="Extension not found")
