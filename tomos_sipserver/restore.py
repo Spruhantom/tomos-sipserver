@@ -142,6 +142,7 @@ def restore_archive(archive: Path, root: Path = Path("/"), service_control=None,
         pre_restore_backup = str(module.build_archive(Path("/var/backups/tomos-sipserver/pre-restore")))
     was_active = {}
     stopped = []
+    started = []
     try:
         for service in SERVICES:
             was_active[service] = bool(control("is-active", service))
@@ -161,14 +162,24 @@ def restore_archive(archive: Path, root: Path = Path("/"), service_control=None,
         validate(root)
         if "asterisk.service" in stopped:
             control("start", "asterisk.service")
+            started.append("asterisk.service")
             validate(root)
         for service in stopped:
             if service != "asterisk.service":
                 control("start", service)
+                started.append(service)
         return {"restored": sorted(staged), "services_restarted": stopped,
                 "pre_restore_backup": pre_restore_backup}
     except Exception:
         rollback_errors = []
+        # A service may already be running against the restored files when a
+        # later validation/start step fails. Stop those services before
+        # reverting files, otherwise Asterisk can keep the failed config live.
+        for service in reversed(started):
+            try:
+                control("stop", service)
+            except Exception as error:
+                rollback_errors.append(type(error).__name__)
         for name, (data, mode) in previous.items():
             path = paths[name]
             try:
