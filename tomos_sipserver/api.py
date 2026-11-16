@@ -52,6 +52,10 @@ class UserCreate(BaseModel):
     password: str = Field(min_length=12, max_length=128)
     role: str = Field(default="operator", pattern=r"^(admin|operator|viewer)$")
 
+class TelephonySettingsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    country_code: str = Field(default="GB", pattern=r"^(GB|INTL)$")
+
 class UserUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     role: str | None = Field(default=None, pattern=r"^(admin|operator|viewer)$")
@@ -409,18 +413,38 @@ def create_app(
             "completed_by": state["completed_by"],
             "extensions_count": extensions,
             "devices_count": devices,
+            "country_code": state["country_code"],
             "asterisk": get_status().get("status", "unknown"),
         }
 
-    @app.post("/api/v1/setup/complete", tags=["setup"])
-    def complete_setup(principal: dict = Depends(require_admin)):
-        completed_at = _utc_now()
+    @app.get("/api/v1/settings/telephony", tags=["settings"])
+    def get_telephony_settings(principal: dict = Depends(require_admin)):
         with connect(db_path) as connection:
+            row = connection.execute("SELECT country_code FROM setup_state WHERE id = 1").fetchone()
+        return {"country_code": row["country_code"], "available_profiles": [
+            {"code": "GB", "name": "United Kingdom"},
+            {"code": "INTL", "name": "International / manual"},
+        ]}
+
+    @app.put("/api/v1/settings/telephony", tags=["settings"])
+    def update_telephony_settings(payload: TelephonySettingsUpdate, principal: dict = Depends(require_admin)):
+        def operation(connection):
+            connection.execute("UPDATE setup_state SET country_code = ? WHERE id = 1", (payload.country_code,))
+            return {"country_code": payload.country_code}
+        return mutate(operation)
+
+    @app.post("/api/v1/setup/complete", tags=["setup"])
+    def complete_setup(payload: TelephonySettingsUpdate | None = None,
+                       principal: dict = Depends(require_admin)):
+        completed_at = _utc_now()
+        country_code = payload.country_code if payload else "GB"
+        def operation(connection):
             connection.execute(
-                "UPDATE setup_state SET completed = 1, completed_at = ?, completed_by = ? WHERE id = 1",
-                (completed_at, principal["username"]),
+                "UPDATE setup_state SET country_code = ?, completed = 1, completed_at = ?, completed_by = ? WHERE id = 1",
+                (country_code, completed_at, principal["username"]),
             )
-        return {"completed": True, "completed_at": completed_at}
+            return {"completed": True, "completed_at": completed_at, "country_code": country_code}
+        return mutate(operation)
 
     @app.get("/api/v1/users", tags=["user management"])
     def list_users(principal: dict = Depends(require_admin)):
