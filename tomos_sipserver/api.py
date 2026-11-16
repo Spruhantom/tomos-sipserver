@@ -271,6 +271,7 @@ def create_app(
     with connect(db_path) as connection:
         user_count = connection.execute("SELECT COUNT(*) FROM admin_users").fetchone()[0]
         if user_count == 0:
+            connection.execute("UPDATE setup_state SET completed = 0, completed_at = NULL, completed_by = NULL WHERE id = 1")
             now = _utc_now()
             connection.execute("INSERT INTO admin_users(username, password_hash, role, enabled, created_at, updated_at) VALUES (?, ?, 'admin', 1, ?, ?)", (admin_user, hash_password(admin_secret), now, now))
     cookie_secure = os.environ.get("TOMOS_COOKIE_SECURE", "false").lower() in {"1", "true", "yes"}
@@ -391,6 +392,34 @@ def create_app(
     def dashboard_session(request: Request):
         principal = valid_session(request)
         return {"authenticated": principal is not None, "user": principal}
+
+    @app.get("/api/v1/setup/status", tags=["setup"])
+    def setup_status(principal: dict = Depends(require_token)):
+        with connect(db_path) as connection:
+            state = connection.execute(
+                "SELECT completed, completed_at, completed_by FROM setup_state WHERE id = 1"
+            ).fetchone()
+            extensions = connection.execute("SELECT COUNT(*) FROM extensions").fetchone()[0]
+            devices = sum(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                          for table in ("yealink_devices", "grandstream_devices", "polycom_devices", "cisco_devices"))
+        return {
+            "completed": bool(state["completed"]),
+            "completed_at": state["completed_at"],
+            "completed_by": state["completed_by"],
+            "extensions_count": extensions,
+            "devices_count": devices,
+            "asterisk": get_status().get("status", "unknown"),
+        }
+
+    @app.post("/api/v1/setup/complete", tags=["setup"])
+    def complete_setup(principal: dict = Depends(require_admin)):
+        completed_at = _utc_now()
+        with connect(db_path) as connection:
+            connection.execute(
+                "UPDATE setup_state SET completed = 1, completed_at = ?, completed_by = ? WHERE id = 1",
+                (completed_at, principal["username"]),
+            )
+        return {"completed": True, "completed_at": completed_at}
 
     @app.get("/api/v1/users", tags=["user management"])
     def list_users(principal: dict = Depends(require_admin)):
