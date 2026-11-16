@@ -209,6 +209,43 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/v1/extensions/999/provisioning", headers=self.headers).status_code, 404)
         self.assertEqual(self.client.get("/api/v1/extensions/12/provisioning", headers=self.headers).status_code, 422)
 
+    def test_webrtc_config_returns_separate_secret_over_secure_transport(self):
+        created = self.client.post("/api/v1/extensions", headers=self.headers,
+                                   json={"extension": "126", "display_name": "Browser desk"})
+        self.assertEqual(created.status_code, 201)
+        self.assertNotIn("webrtc_password", created.json())
+        self.assertEqual(self.client.get("/api/v1/extensions/126/webrtc").status_code, 401)
+        response = self.client.get("/api/v1/extensions/126/webrtc", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        config = response.json()
+        self.assertEqual(config["websocket_url"], "wss://testserver:8089/ws")
+        self.assertEqual(config["sip_uri"], "sip:126@testserver")
+        self.assertEqual(config["authorization_username"], "126-web")
+        self.assertGreaterEqual(len(config["authorization_password"]), 24)
+        self.assertTrue(config["secure_media"])
+        self.assertEqual(config["media_encryption"], "DTLS-SRTP")
+        self.assertIn("no-store", response.headers["cache-control"])
+
+    def test_webrtc_config_rejects_disabled_and_sccp_extensions(self):
+        self.client.post("/api/v1/extensions", headers=self.headers,
+                         json={"extension": "127", "display_name": "Disabled"})
+        self.client.post("/api/v1/extensions/127/disable", headers=self.headers)
+        self.assertEqual(self.client.get("/api/v1/extensions/127/webrtc", headers=self.headers).status_code, 409)
+        self.client.post("/api/v1/extensions", headers=self.headers,
+                         json={"extension": "128", "display_name": "Cisco", "protocol": "sccp"})
+        self.assertEqual(self.client.get("/api/v1/extensions/128/webrtc", headers=self.headers).status_code, 409)
+
+    def test_webrtc_config_denies_viewer_role(self):
+        self.client.post("/api/v1/extensions", headers=self.headers,
+                         json={"extension": "129", "display_name": "Viewer test"})
+        created = self.client.post("/api/v1/users", headers=self.headers,
+                                   json={"username": "readviewer", "password": "viewer-password-0123456789", "role": "viewer"})
+        self.assertEqual(created.status_code, 201)
+        login = self.client.post("/api/v1/auth/login",
+                                 json={"username": "readviewer", "password": "viewer-password-0123456789"})
+        self.assertEqual(login.status_code, 200)
+        self.assertEqual(self.client.get("/api/v1/extensions/129/webrtc").status_code, 403)
+
     def test_extension_protocol_is_explicit_and_sccp_does_not_return_sip_secret(self):
         sip = self.client.post("/api/v1/extensions", headers=self.headers,
                                json={"extension": "140", "display_name": "SIP phone"})
