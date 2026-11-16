@@ -116,10 +116,14 @@ jobs:
           marker = "[tomos-internal]"
           if config.count(marker) != 1:
               raise SystemExit("expected exactly one generated [tomos-internal] context")
-          # Put the answered-call fixture in the already-generated internal
-          # context so the test exercises the same dialplan Asterisk loads
-          # for normal extensions, without relying on a second context block.
-          config += "\nexten => 900,1,Set(CALLERID(num)=100)\n same => n,Answer()\n same => n,Wait(1)\n same => n,Hangup()\n"
+          start = config.index(marker) + len(marker)
+          next_context = config.find("\\n[", start)
+          if next_context < 0:
+              raise SystemExit("could not locate the next dialplan context")
+          # Insert the answered-call fixture before the next context header,
+          # keeping it inside [tomos-internal] even when country contexts exist.
+          fixture = "\\nexten => 900,1,Set(CALLERID(num)=100)\\n same => n,Answer()\\n same => n,Wait(1)\\n same => n,Hangup()\\n"
+          config = config[:next_context] + fixture + config[next_context:]
           path.write_text(config, encoding="utf-8")
           PY
           chown root:asterisk /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf
