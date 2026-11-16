@@ -27,6 +27,8 @@ jobs:
           shellcheck --severity=error install.sh installer/install.sh scripts/tomos-sipserver-check scripts/tomos-sipserver-apply-config
       - name: Check dashboard JavaScript syntax
         run: node --check dashboard/app.js
+      - name: Compile WSS endpoint preflight helper
+        run: python -m py_compile scripts/check-webrtc-endpoint.py
       - name: Install API test dependencies
         run: python -m pip install -r requirements-dev.txt
       - name: Run Python tests
