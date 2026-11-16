@@ -38,6 +38,8 @@ It then:
 - Generates an API bearer token in `/root/tomos-sip-api-token.txt` and stores the dashboard administrator username and password in `/root/tomos-sip-dashboard-username.txt` and `/root/tomos-sip-dashboard-password.txt` (mode 0600). On an interactive first install, the installer prompts for both dashboard credentials; passwords are hidden while typed and must be at least 24 characters. On upgrades, existing credentials are preserved when the password prompt is left blank. In non-interactive installs, a strong random password is generated.
 - Serves the dashboard and API on `127.0.0.1:8000`; it is not exposed directly to the LAN.
 - On a genuinely fresh database, opens a first-run dashboard checklist after the first administrator sign-in. It checks Asterisk status, shows the pre-created extensions, links directly to phone/extension creation, explains trusted-LAN security and can be completed or deferred until the next sign-in. Existing installations are marked as already configured during database migration and do not receive a surprise setup wizard.
+
+- Selects the **United Kingdom (GB)** telephony country profile by default on new and upgraded databases. The first-run checklist lets an administrator choose **United Kingdom (GB)** or **International / manual**, and the administrator can change this later in Telephony country settings. Changing the profile regenerates and reloads the Asterisk dial plan transactionally. The UK profile recognises national numbers beginning 01–09 and international numbers beginning 00, and computes +44 / + international E.164 forms for diagnostics. It deliberately does **not** place external calls: those patterns are blocked until a SIP trunk is configured. Calls to 999 and 112 are also explicitly blocked in this no-trunk profile; do not rely on this PBX for emergency calling.
 - Installs a narrowly-scoped sudo helper for validated PJSIP configuration generation and reload.
 - Loads `chan_sccp.so`, disables the conflicting built-in `chan_skinny.so`, and installs the initial SCCP listener configuration in `/etc/asterisk/sccp.conf`.
 - Enables the Asterisk, health-check and API systemd units.
@@ -86,6 +88,10 @@ The dashboard is served at `http://127.0.0.1:8000/`. On the first install, sign 
 - `GET /api/v1/calls/export.csv` — export matching call history as CSV (maximum 5,000 records per export). Spreadsheet formula-leading values are neutralised.
 
 Each mutation regenerates PJSIP and dialplan configuration and requests an Asterisk reload. If configuration application fails, the API restores the previous database state and returns an error. The API runs as the unprivileged `tomos` user; a fixed-purpose root helper is allowed through one sudoers command only.
+
+## Telephony country settings
+
+- `GET /api/v1/settings/telephony` and `PUT /api/v1/settings/telephony` — read or change the administrator-controlled country dial-plan profile (`GB` or `INTL`). Profile changes regenerate Asterisk configuration and roll back the database setting if the reload fails.
 
 ## Browser phone (SIP.js and WebRTC)
 
