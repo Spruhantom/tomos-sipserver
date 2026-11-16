@@ -178,8 +178,9 @@ jobs:
           asterisk -rx 'dialplan reload'
           TEST_EXTENSION="$(asterisk -rx 'dialplan show 900@tomos-internal')"
           printf '%s\\n' "$TEST_EXTENSION"
-          if grep -Fq 'No such extension/context' <<<"$TEST_EXTENSION" \\
-            || ! grep -Eq "^[[:space:]]*'900'[[:space:]]*=>" <<<"$TEST_EXTENSION"; then
+          if ! grep -Fq 'No such extension/context' <<<"$TEST_EXTENSION" && grep -Eq "^[[:space:]]*'900'[[:space:]]*=>" <<<"$TEST_EXTENSION"; then
+            :
+          else
             echo "CI test extension 900 was not loaded in tomos-internal" >&2
             exit 1
           fi
