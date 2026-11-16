@@ -270,7 +270,7 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertEqual(payload["phone"]["media_encryption"], "DTLS-SRTP")
         self.assertNotIn("password", payload["phone"])
         self.client.post("/api/v1/auth/logout")
-        self.assertEqual(self.client.get("/api/v1/me/webphone").status_code, 403)
+        self.assertEqual(self.client.get("/api/v1/me/webphone").status_code, 401)
 
     def test_extension_assignment_is_unique_and_sip_only(self):
         self.client.post("/api/v1/extensions", headers=self.headers,
