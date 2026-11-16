@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+sys.path.insert(0, "/opt/tomos-sipserver/app")
 from tomos_sipserver.trunk_store import configure_trunk, disable_trunk, public_status, rotate_secret
 
 def main() -> int:
