@@ -35,6 +35,7 @@ class ExtensionApiTests(unittest.TestCase):
         pending = self.client.get("/api/v1/setup/status", headers=self.headers)
         self.assertEqual(pending.status_code, 200)
         self.assertFalse(pending.json()["completed"])
+        self.assertEqual(pending.json()["country_code"], "GB")
         self.assertEqual(pending.json()["extensions_count"], 0)
         self.assertEqual(self.client.post("/api/v1/setup/complete").status_code, 401)
         completed = self.client.post("/api/v1/setup/complete", headers=self.headers)
@@ -61,6 +62,30 @@ class ExtensionApiTests(unittest.TestCase):
         status = client.get("/api/v1/setup/status", headers={"Authorization": "Bearer " + token})
         self.assertEqual(status.status_code, 200)
         self.assertTrue(status.json()["completed"])
+
+    def test_telephony_country_profile_defaults_to_uk_and_can_be_changed(self):
+        settings = self.client.get("/api/v1/settings/telephony", headers=self.headers)
+        self.assertEqual(settings.status_code, 200)
+        self.assertEqual(settings.json()["country_code"], "GB")
+        self.assertIn({"code": "GB", "name": "United Kingdom"}, settings.json()["available_profiles"])
+        changed = self.client.put("/api/v1/settings/telephony", headers=self.headers,
+                                  json={"country_code": "INTL"})
+        self.assertEqual(changed.status_code, 200)
+        self.assertEqual(changed.json()["country_code"], "INTL")
+        status = self.client.get("/api/v1/setup/status", headers=self.headers)
+        self.assertEqual(status.json()["country_code"], "INTL")
+        invalid = self.client.put("/api/v1/settings/telephony", headers=self.headers,
+                                  json={"country_code": "US"})
+        self.assertEqual(invalid.status_code, 422)
+
+    def test_first_run_setup_saves_selected_country_profile(self):
+        response = self.client.post("/api/v1/setup/complete", headers=self.headers,
+                                    json={"country_code": "GB"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["country_code"], "GB")
+        state = self.client.get("/api/v1/setup/status", headers=self.headers)
+        self.assertTrue(state.json()["completed"])
+        self.assertEqual(state.json()["country_code"], "GB")
 
     def test_health_is_public(self):
         response = self.client.get("/health")
