@@ -1206,7 +1206,7 @@ def create_app(
             "extension": row["extension"],
             "display_name": row["display_name"],
             "websocket_url": websocket_url,
-            "sip_uri": f"sip:{extension}@{sip_domain}",
+            "sip_uri": f"sip:webrtc-{extension}@{sip_domain}",
             "authorization_username": f"{extension}-web",
             "authorization_password": row["webrtc_password"],
             "secure_media": True,
