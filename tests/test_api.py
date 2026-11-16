@@ -44,6 +44,24 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertTrue(status.json()["completed"])
         self.assertEqual(status.json()["completed_by"], "api-token")
 
+    def test_existing_installation_is_not_forced_into_first_run_setup(self):
+        import sqlite3
+        from tomos_sipserver.auth import hash_password
+        legacy = Path(self.tmp.name) / "existing-install.db"
+        initialize_database(legacy)
+        with sqlite3.connect(legacy) as connection:
+            connection.execute(
+                "INSERT INTO admin_users(username, password_hash, role, enabled, created_at, updated_at) VALUES (?, ?, 'admin', 1, ?, ?)",
+                ("existing-admin", hash_password("existing-admin-password-0123456789"), "2026-01-01", "2026-01-01"),
+            )
+        token = "existing-install-token-" + "x" * 40
+        client = TestClient(create_app(legacy, token, lambda: None,
+                                       admin_password="existing-admin-password-0123456789",
+                                       admin_username="existing-admin"))
+        status = client.get("/api/v1/setup/status", headers={"Authorization": "Bearer " + token})
+        self.assertEqual(status.status_code, 200)
+        self.assertTrue(status.json()["completed"])
+
     def test_health_is_public(self):
         response = self.client.get("/health")
         self.assertEqual(response.status_code, 200)
