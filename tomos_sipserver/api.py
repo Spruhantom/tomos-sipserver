@@ -71,6 +71,7 @@ class ExtensionCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     extension: str = Field(pattern=EXTENSION_PATTERN)
     display_name: str = Field(min_length=1, max_length=64)
+    protocol: str = Field(default="sip", pattern=r"^(sip|sccp)$")
     password: str | None = Field(default=None, pattern=PASSWORD_PATTERN)
 
 
@@ -83,6 +84,7 @@ class ExtensionUpdate(BaseModel):
 class ExtensionView(BaseModel):
     extension: str
     display_name: str
+    protocol: str
     enabled: bool
     created_at: str
     updated_at: str
@@ -145,6 +147,7 @@ def _view(row: sqlite3.Row) -> dict:
     return {
         "extension": row["extension"],
         "display_name": row["display_name"],
+        "protocol": row["protocol"],
         "enabled": bool(row["enabled"]),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -268,6 +271,7 @@ def create_app(
     with connect(db_path) as connection:
         user_count = connection.execute("SELECT COUNT(*) FROM admin_users").fetchone()[0]
         if user_count == 0:
+            connection.execute("UPDATE setup_state SET completed = 0, completed_at = NULL, completed_by = NULL WHERE id = 1")
             now = _utc_now()
             connection.execute("INSERT INTO admin_users(username, password_hash, role, enabled, created_at, updated_at) VALUES (?, ?, 'admin', 1, ?, ?)", (admin_user, hash_password(admin_secret), now, now))
     cookie_secure = os.environ.get("TOMOS_COOKIE_SECURE", "false").lower() in {"1", "true", "yes"}
@@ -388,6 +392,34 @@ def create_app(
     def dashboard_session(request: Request):
         principal = valid_session(request)
         return {"authenticated": principal is not None, "user": principal}
+
+    @app.get("/api/v1/setup/status", tags=["setup"])
+    def setup_status(principal: dict = Depends(require_token)):
+        with connect(db_path) as connection:
+            state = connection.execute(
+                "SELECT completed, completed_at, completed_by FROM setup_state WHERE id = 1"
+            ).fetchone()
+            extensions = connection.execute("SELECT COUNT(*) FROM extensions").fetchone()[0]
+            devices = sum(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                          for table in ("yealink_devices", "grandstream_devices", "polycom_devices", "cisco_devices"))
+        return {
+            "completed": bool(state["completed"]),
+            "completed_at": state["completed_at"],
+            "completed_by": state["completed_by"],
+            "extensions_count": extensions,
+            "devices_count": devices,
+            "asterisk": get_status().get("status", "unknown"),
+        }
+
+    @app.post("/api/v1/setup/complete", tags=["setup"])
+    def complete_setup(principal: dict = Depends(require_admin)):
+        completed_at = _utc_now()
+        with connect(db_path) as connection:
+            connection.execute(
+                "UPDATE setup_state SET completed = 1, completed_at = ?, completed_by = ? WHERE id = 1",
+                (completed_at, principal["username"]),
+            )
+        return {"completed": True, "completed_at": completed_at}
 
     @app.get("/api/v1/users", tags=["user management"])
     def list_users(principal: dict = Depends(require_admin)):
@@ -583,12 +615,14 @@ def create_app(
         now = _utc_now()
         with connect(db_path) as connection:
             extension_row = connection.execute(
-                "SELECT enabled FROM extensions WHERE extension = ?", (payload.extension,)
+                "SELECT enabled, protocol FROM extensions WHERE extension = ?", (payload.extension,)
             ).fetchone()
             if extension_row is None:
                 raise HTTPException(status_code=404, detail="Extension not found")
             if not extension_row["enabled"]:
                 raise HTTPException(status_code=409, detail="Enable the SIP extension before provisioning a phone")
+            if extension_row["protocol"] != "sip":
+                raise HTTPException(status_code=409, detail="This extension uses SCCP, not SIP provisioning")
             try:
                 connection.execute(
                     """INSERT INTO polycom_devices
@@ -717,17 +751,23 @@ def create_app(
         display_name = payload.display_name.strip()
         if not display_name:
             raise HTTPException(status_code=422, detail="display_name cannot be blank")
+        if payload.protocol == "sccp" and not re.fullmatch(r"^[A-Za-z0-9][A-Za-z0-9 ._()\-]{0,63}$", display_name):
+            raise HTTPException(status_code=422, detail="SCCP display names must use letters, numbers, spaces, dots, underscores, parentheses or hyphens")
         password = payload.password or secrets.token_urlsafe(32)
         now = _utc_now()
         def operation(connection):
             try:
                 connection.execute(
-                    "INSERT INTO extensions(extension, display_name, password, enabled, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)",
-                    (payload.extension, display_name, password, now, now),
+                    "INSERT INTO extensions(extension, display_name, password, protocol, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)",
+                    (payload.extension, display_name, password, payload.protocol, now, now),
                 )
             except sqlite3.IntegrityError as error:
                 raise HTTPException(status_code=409, detail="Extension already exists") from error
-            return {"extension": payload.extension, "display_name": display_name, "enabled": True, "sip_password": password}
+            result = {"extension": payload.extension, "display_name": display_name,
+                      "protocol": payload.protocol, "enabled": True}
+            if payload.protocol == "sip":
+                result["sip_password"] = password
+            return result
         return mutate(operation)
 
 
@@ -750,12 +790,14 @@ def create_app(
         now = _utc_now()
         with connect(db_path) as connection:
             extension_row = connection.execute(
-                "SELECT enabled FROM extensions WHERE extension = ?", (payload.extension,)
+                "SELECT enabled, protocol FROM extensions WHERE extension = ?", (payload.extension,)
             ).fetchone()
             if extension_row is None:
                 raise HTTPException(status_code=404, detail="Extension not found")
             if not extension_row["enabled"]:
-                raise HTTPException(status_code=409, detail="Enable the SIP extension before assigning a Cisco phone")
+                raise HTTPException(status_code=409, detail="Enable the SCCP extension before assigning a Cisco phone")
+            if extension_row["protocol"] != "sccp":
+                raise HTTPException(status_code=409, detail="Cisco SCCP handsets require an SCCP extension")
             try:
                 connection.execute(
                     """INSERT INTO cisco_devices (mac, extension, model, server_host, created_at)
@@ -845,12 +887,14 @@ def create_app(
         now = _utc_now()
         with connect(db_path) as connection:
             extension_row = connection.execute(
-                "SELECT enabled FROM extensions WHERE extension = ?", (payload.extension,)
+                "SELECT enabled, protocol FROM extensions WHERE extension = ?", (payload.extension,)
             ).fetchone()
             if extension_row is None:
                 raise HTTPException(status_code=404, detail="Extension not found")
             if not extension_row["enabled"]:
                 raise HTTPException(status_code=409, detail="Enable the SIP extension before provisioning a phone")
+            if extension_row["protocol"] != "sip":
+                raise HTTPException(status_code=409, detail="This extension uses SCCP, not SIP provisioning")
             try:
                 connection.execute(
                     """INSERT INTO yealink_devices
@@ -982,12 +1026,14 @@ def create_app(
         now = _utc_now()
         with connect(db_path) as connection:
             extension_row = connection.execute(
-                "SELECT enabled FROM extensions WHERE extension = ?", (payload.extension,)
+                "SELECT enabled, protocol FROM extensions WHERE extension = ?", (payload.extension,)
             ).fetchone()
             if extension_row is None:
                 raise HTTPException(status_code=404, detail="Extension not found")
             if not extension_row["enabled"]:
                 raise HTTPException(status_code=409, detail="Enable the SIP extension before provisioning a phone")
+            if extension_row["protocol"] != "sip":
+                raise HTTPException(status_code=409, detail="This extension uses SCCP, not SIP provisioning")
             try:
                 connection.execute(
                     """INSERT INTO grandstream_devices
@@ -1109,11 +1155,13 @@ def create_app(
             raise HTTPException(status_code=422, detail="Invalid extension number")
         with connect(db_path) as connection:
             row = connection.execute(
-                "SELECT extension, display_name, enabled FROM extensions WHERE extension = ?",
+                "SELECT extension, display_name, enabled, protocol FROM extensions WHERE extension = ?",
                 (extension,),
             ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Extension not found")
+        if row["protocol"] != "sip":
+            raise HTTPException(status_code=409, detail="SIP settings are unavailable for an SCCP extension")
         return {
             "extension": row["extension"],
             "display_name": row["display_name"],
@@ -1170,9 +1218,12 @@ def create_app(
             raise HTTPException(status_code=422, detail="Invalid extension number")
         password = secrets.token_urlsafe(32)
         def operation(connection):
-            cursor = connection.execute("UPDATE extensions SET password = ?, updated_at = ? WHERE extension = ?", (password, _utc_now(), extension))
-            if cursor.rowcount == 0:
+            row = connection.execute("SELECT protocol FROM extensions WHERE extension = ?", (extension,)).fetchone()
+            if row is None:
                 raise HTTPException(status_code=404, detail="Extension not found")
+            if row["protocol"] != "sip":
+                raise HTTPException(status_code=409, detail="SCCP extensions do not use SIP passwords")
+            connection.execute("UPDATE extensions SET password = ?, updated_at = ? WHERE extension = ?", (password, _utc_now(), extension))
             return {"extension": extension, "sip_password": password}
         return mutate(operation)
 

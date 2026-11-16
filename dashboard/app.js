@@ -1,6 +1,7 @@
 const $=s=>document.querySelector(s);
 let csrf='';
 let currentUser=null;
+let setupPromptChecked=false;
 let resetUserId=null;
 let callFilters={};
 let callOffset=0;
@@ -16,6 +17,15 @@ const api=async(path,opt={})=>{
 function showLogin(){$('#login').hidden=false;$('#app').hidden=true;$('#logout').hidden=true;$('#change-password').hidden=true;$('#current-user').textContent='';currentUser=null}
 function showApp(){$('#login').hidden=true;$('#app').hidden=false;$('#logout').hidden=false;$('#change-password').hidden=false;$('#current-user').textContent=currentUser?currentUser.username+' · '+currentUser.role:'';$('#app').classList.toggle('role-viewer',currentUser?.role==='viewer');$('#app').classList.toggle('role-operator',currentUser?.role==='operator');$('#user-management').hidden=currentUser?.role!=='admin';}
 function note(s){const n=$('#notice');n.textContent=s;n.style.display='block';setTimeout(()=>n.style.display='none',3200)}
+async function checkFirstRunSetup(){
+  if(setupPromptChecked||currentUser?.role!=='admin')return;
+  const state=await api('/setup/status');
+  setupPromptChecked=true;
+  if(state.completed)return;
+  $('#setup-asterisk-state').textContent=state.asterisk==='online'?'Asterisk is online':'Asterisk needs attention';
+  $('#setup-extension-count').textContent=state.extensions_count+' extension'+(state.extensions_count===1?'':'s')+' configured';
+  $('#first-run-setup').hidden=false;
+}
 function cookie(n){return document.cookie.split('; ').find(x=>x.startsWith(n+'='))?.split('=').slice(1).join('=')||''}
 function secret(s){$('#secret-value').textContent=s;$('#secret-dialog').showModal()}
 function queryForCalls(){const p=new URLSearchParams({limit:String(callPageSize),offset:String(callOffset)});for(const [k,v] of Object.entries(callFilters))if(v)p.set(k,v);return p.toString()}
@@ -37,7 +47,7 @@ async function loadCalls(){
   }
 }
 async function refresh(){
-  const [sum,rows,status,yealinkDevices,grandstreamDevices,polycomDevices]=await Promise.all([api('/dashboard/summary'),api('/extensions'),api('/dashboard/status'),api('/devices/yealink'),api('/devices/grandstream'),api('/devices/polycom')]);
+  const [sum,rows,status,yealinkDevices,grandstreamDevices,polycomDevices,ciscoDevices]=await Promise.all([api('/dashboard/summary'),api('/extensions'),api('/dashboard/status'),api('/devices/yealink'),api('/devices/grandstream'),api('/devices/polycom'),api('/devices/cisco')]);
   if(currentUser?.role==='admin')await loadUsers();
   $('#api-value').textContent='Online';
   $('#asterisk-value').textContent=status.status==='online'?'Online':'Offline';
@@ -52,6 +62,7 @@ async function refresh(){
   }
   $('#total-value').textContent=sum.extensions_total;
   $('#enabled-value').textContent=sum.extensions_enabled;
+  if(!$('#first-run-setup').hidden)$('#setup-extension-count').textContent=sum.extensions_total+' extension'+(sum.extensions_total===1?'':'s')+' configured';
   $('#api-status').textContent='API online';
   await loadCalls();
   $('#yealink-devices').replaceChildren();
@@ -138,19 +149,41 @@ async function refresh(){
     };
     actions.append(rotate,remove);tr.append(actions);$('#polycom-devices').append(tr)
   }
+  $('#cisco-devices').replaceChildren();$('#cisco-empty').hidden=ciscoDevices.length>0;
+  for(const device of ciscoDevices){
+    const tr=document.createElement('tr');
+    for(const value of [device.model,device.mac,device.extension,device.display_name,device.server_host]){
+      const td=document.createElement('td');td.textContent=value;tr.append(td)
+    }
+    const profile=document.createElement('td');
+    profile.textContent=device.enabled?'Generated · hardware untested':'Disabled';
+    tr.append(profile);
+    const actions=document.createElement('td');
+    const remove=document.createElement('button');remove.textContent='Remove handset';
+    remove.onclick=async()=>{
+      if(!confirm('Remove Cisco handset '+device.mac+' from SCCP inventory?'))return;
+      try{await api('/devices/cisco/'+encodeURIComponent(device.mac),{method:'DELETE'});await refresh();note('Cisco handset removed')}
+      catch(error){note(error.message)}
+    };
+    actions.append(remove);tr.append(actions);$('#cisco-devices').append(tr)
+  }
   $('#extensions').replaceChildren();$('#empty').hidden=rows.length>0;
   for(const x of rows){
     const tr=document.createElement('tr');
-    for(const v of [x.extension,x.display_name]){const td=document.createElement('td');td.textContent=v;tr.append(td)}
+    for(const v of [x.extension,x.display_name,x.protocol.toUpperCase()]){const td=document.createElement('td');td.textContent=v;tr.append(td)}
     const state=document.createElement('td'),pill=document.createElement('span');
     pill.className='pill '+(x.enabled?'':'off');pill.textContent=x.enabled?'Enabled':'Disabled';state.append(pill);tr.append(state);
     const actions=document.createElement('td');
-    const yealink=document.createElement('button');yealink.textContent='Provision Yealink';yealink.disabled=!x.enabled;yealink.onclick=()=>openYealinkSetup(x);actions.append(yealink);
-    const grandstream=document.createElement('button');grandstream.textContent='Provision Grandstream';grandstream.disabled=!x.enabled;grandstream.onclick=()=>openGrandstreamSetup(x);actions.append(grandstream);
-    const polycom=document.createElement('button');polycom.textContent='Provision Polycom';polycom.disabled=!x.enabled;polycom.onclick=()=>openPolycomSetup(x);actions.append(polycom);
-    for(const [label,path,method] of [['Configure phone','/extensions/'+x.extension+'/provisioning','GET'],[x.enabled?'Disable':'Enable','/extensions/'+x.extension+'/'+(x.enabled?'disable':'enable'),'POST'],['Reset password','/extensions/'+x.extension+'/password','POST'],['Delete','/extensions/'+x.extension,'DELETE']]){
+    if(x.protocol==='sip'){
+      const yealink=document.createElement('button');yealink.textContent='Provision Yealink';yealink.disabled=!x.enabled;yealink.onclick=()=>openYealinkSetup(x);actions.append(yealink);
+      const grandstream=document.createElement('button');grandstream.textContent='Provision Grandstream';grandstream.disabled=!x.enabled;grandstream.onclick=()=>openGrandstreamSetup(x);actions.append(grandstream);
+      const polycom=document.createElement('button');polycom.textContent='Provision Polycom';polycom.disabled=!x.enabled;polycom.onclick=()=>openPolycomSetup(x);actions.append(polycom);
+      const configure=document.createElement('button');configure.textContent='SIP settings';configure.disabled=!x.enabled;configure.onclick=async()=>{try{openDeviceSetup(await api('/extensions/'+x.extension+'/provisioning'))}catch(error){note(error.message)}};actions.append(configure);
+      const reset=document.createElement('button');reset.textContent='Reset SIP password';reset.onclick=async()=>{try{const d=await api('/extensions/'+x.extension+'/password',{method:'POST'});if(d?.sip_password)secret(d.sip_password);await refresh()}catch(error){note(error.message)}};actions.append(reset);
+    }
+    for(const [label,path,method] of [[x.enabled?'Disable':'Enable','/extensions/'+x.extension+'/'+(x.enabled?'disable':'enable'),'POST'],['Delete','/extensions/'+x.extension,'DELETE']]){
       const b=document.createElement('button');b.textContent=label;
-      b.onclick=async()=>{if(method==='DELETE'&&!confirm('Delete extension '+x.extension+'?'))return;try{const d=await api(path,{method});if(method==='GET'){openDeviceSetup(d);return}if(d?.sip_password)secret(d.sip_password);await refresh();note('Extension updated')}catch(e){note(e.message)}};
+      b.onclick=async()=>{if(method==='DELETE'&&!confirm('Delete extension '+x.extension+'?'))return;try{await api(path,{method});await refresh();note('Extension updated')}catch(error){note(error.message)}};
       actions.append(b)
     }
     tr.append(actions);$('#extensions').append(tr)
@@ -313,7 +346,7 @@ $('#export-calls').onclick=async()=>{
     a.href=url;a.download='tomos-call-history.csv';document.body.append(a);a.click();a.remove();URL.revokeObjectURL(url)
   }catch(err){note(err.message)}
 };
-$('#login-form').onsubmit=async e=>{e.preventDefault();try{const result=await api('/auth/login',{method:'POST',body:JSON.stringify({username:$('#username').value,password:$('#password').value})});currentUser=result.user;csrf=cookie('tomos_csrf');showApp();await refresh()}catch(err){$('#login-error').textContent=err.message}};
+$('#login-form').onsubmit=async e=>{e.preventDefault();try{const result=await api('/auth/login',{method:'POST',body:JSON.stringify({username:$('#username').value,password:$('#password').value})});currentUser=result.user;csrf=cookie('tomos_csrf');setupPromptChecked=false;showApp();await refresh();await checkFirstRunSetup()}catch(err){$('#login-error').textContent=err.message}};
 $('#logout').onclick=async()=>{try{await api('/auth/logout',{method:'POST'})}finally{csrf='';currentUser=null;$('#change-password').hidden=true;$('#current-user').textContent='';showLogin()}};
 $('#change-password').onclick=()=>$('#own-password-dialog').showModal();
 $('#own-password-form').onsubmit=async e=>{e.preventDefault();try{await api('/auth/password',{method:'POST',body:JSON.stringify({old_password:$('#own-old-password').value,new_password:$('#own-new-password').value})});$('#own-password-dialog').close();$('#own-password-form').reset();note('Your password has been changed')}catch(err){note(err.message)}};
@@ -350,13 +383,44 @@ $('#audit-refresh').onclick=()=>loadAudit().catch(error=>note(error.message));
 $("#user-create-form").onsubmit=async event=>{event.preventDefault();const button=$("#user-create-form button");button.disabled=true;try{const result=await api("/users",{method:"POST",body:JSON.stringify({username:$("#new-username").value.trim(),password:$("#new-user-password").value,role:$("#new-user-role").value})});$("#user-create-form").reset();await loadUsers();note("Created "+result.role+" account "+result.username)}catch(error){note(error.message)}finally{button.disabled=false}};
 $("#user-password-form").onsubmit=async event=>{event.preventDefault();if(!resetUserId)return;const button=$("#user-password-form button.primary");button.disabled=true;try{await api("/users/"+resetUserId+"/password",{method:"POST",body:JSON.stringify({password:$("#user-reset-password").value})});$("#user-password-dialog").close();$("#user-password-form").reset();note("Account password reset")}catch(error){note(error.message)}finally{button.disabled=false}};
 
-$('#new-extension').onclick=()=>$('#create-dialog').showModal();
+$('#new-extension').onclick=()=>{$('#create-form').reset();$('#protocol').value='sip';$('#protocol').onchange();$('#create-dialog').showModal()};
+$('#protocol').onchange=()=>{const isSccp=$('#protocol').value==='sccp';$('#sccp-fields').hidden=!isSccp;$('#cisco-mac').required=isSccp;$('#cisco-host').required=isSccp};
 $('#create-form').onsubmit=async e=>{
   e.preventDefault();
-  try{const d=await api('/extensions',{method:'POST',body:JSON.stringify({extension:$('#number').value,display_name:$('#display-name').value})});$('#create-dialog').close();$('#create-form').reset();secret(d.sip_password);await refresh()}
-  catch(err){note(err.message)}
+  const button=$('#create-form button.primary');button.disabled=true;
+  const extension=$('#number').value.trim(),protocol=$('#protocol').value;
+  try{
+    const payload={extension,display_name:$('#display-name').value.trim(),protocol};
+    const result=await api('/extensions',{method:'POST',body:JSON.stringify(payload)});
+    if(protocol==='sip'){
+      $('#create-dialog').close();$('#create-form').reset();secret(result.sip_password);
+      note('SIP extension created');
+    }else{
+      try{
+        await api('/devices/cisco',{method:'POST',body:JSON.stringify({
+          extension,mac:$('#cisco-mac').value.trim(),model:$('#cisco-model').value,
+          server_host:$('#cisco-host').value.trim()
+        })});
+      }catch(error){
+        try{await api('/extensions/'+extension,{method:'DELETE'})}catch(rollback){note('Cisco setup failed and the new extension could not be rolled back: '+rollback.message)}
+        throw error;
+      }
+      $('#create-dialog').close();$('#create-form').reset();
+      note('SCCP extension and Cisco profile created. Handset firmware and physical compatibility still need testing.');
+    }
+    await refresh();
+  }catch(err){note(err.message)}
+  finally{button.disabled=false}
+};
+$('#setup-add-phone').onclick=()=>$('#new-extension').click();
+$('#setup-later').onclick=()=>{$('#first-run-setup').hidden=true;note('Setup reminder saved for your next sign-in')};
+$('#setup-complete').onclick=async()=>{
+  const button=$('#setup-complete');button.disabled=true;
+  try{await api('/setup/complete',{method:'POST'});$('#first-run-setup').hidden=true;note('First-run setup completed. You can manage phones and extensions any time.')}
+  catch(error){note(error.message)}
+  finally{button.disabled=false}
 };
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>b.closest('dialog').close());
 $('#copy-secret').onclick=async()=>{await navigator.clipboard.writeText($('#secret-value').textContent);note('Password copied')};
-(async()=>{const r=await fetch('/api/v1/auth/session'),d=await r.json();if(d.authenticated){currentUser=d.user;csrf=cookie('tomos_csrf');showApp();try{await refresh()}catch(e){note(e.message)}}else showLogin()})();
+(async()=>{const r=await fetch('/api/v1/auth/session'),d=await r.json();if(d.authenticated){currentUser=d.user;csrf=cookie('tomos_csrf');showApp();try{await refresh();await checkFirstRunSetup()}catch(e){note(e.message)}}else showLogin()})();
 setInterval(()=>{if(!$('#app').hidden)refresh().catch(e=>note(e.message))},15000);

@@ -39,12 +39,18 @@ def initialize_database(path: str | Path = DEFAULT_DB) -> None:
                 extension TEXT PRIMARY KEY,
                 display_name TEXT NOT NULL,
                 password TEXT NOT NULL,
+                protocol TEXT NOT NULL DEFAULT 'sip' CHECK (protocol IN ('sip', 'sccp')),
                 enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
         """)
+        # Upgrade existing installations without changing their current SIP extensions.
+        extension_columns = {row["name"] for row in connection.execute("PRAGMA table_info(extensions)")}
+        if "protocol" not in extension_columns:
+            connection.execute("ALTER TABLE extensions ADD COLUMN protocol TEXT NOT NULL DEFAULT 'sip' CHECK (protocol IN ('sip', 'sccp'))")
         connection.execute("CREATE INDEX IF NOT EXISTS extensions_enabled_idx ON extensions(enabled)")
+        connection.execute("CREATE INDEX IF NOT EXISTS extensions_protocol_enabled_idx ON extensions(protocol, enabled)")
         connection.execute("""
             CREATE TABLE IF NOT EXISTS admin_users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,6 +63,19 @@ def initialize_database(path: str | Path = DEFAULT_DB) -> None:
             )
         """)
         connection.execute("CREATE INDEX IF NOT EXISTS admin_users_role_enabled_idx ON admin_users(role, enabled)")
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS setup_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                completed INTEGER NOT NULL DEFAULT 1 CHECK (completed IN (0, 1)),
+                completed_at TEXT,
+                completed_by TEXT
+            )
+        """)
+        # Existing installations are considered configured. A genuinely fresh
+        # database is marked pending by create_app before its first admin is added.
+        connection.execute(
+            "INSERT OR IGNORE INTO setup_state(id, completed) VALUES (1, 1)"
+        )
         connection.execute("""
             CREATE TABLE IF NOT EXISTS audit_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

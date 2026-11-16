@@ -30,6 +30,38 @@ class ExtensionApiTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def test_first_run_setup_is_pending_until_admin_completes_it(self):
+        self.assertEqual(self.client.get("/api/v1/setup/status").status_code, 401)
+        pending = self.client.get("/api/v1/setup/status", headers=self.headers)
+        self.assertEqual(pending.status_code, 200)
+        self.assertFalse(pending.json()["completed"])
+        self.assertEqual(pending.json()["extensions_count"], 0)
+        self.assertEqual(self.client.post("/api/v1/setup/complete").status_code, 401)
+        completed = self.client.post("/api/v1/setup/complete", headers=self.headers)
+        self.assertEqual(completed.status_code, 200)
+        self.assertTrue(completed.json()["completed"])
+        status = self.client.get("/api/v1/setup/status", headers=self.headers)
+        self.assertTrue(status.json()["completed"])
+        self.assertEqual(status.json()["completed_by"], "api-token")
+
+    def test_existing_installation_is_not_forced_into_first_run_setup(self):
+        import sqlite3
+        from tomos_sipserver.auth import hash_password
+        legacy = Path(self.tmp.name) / "existing-install.db"
+        initialize_database(legacy)
+        with sqlite3.connect(legacy) as connection:
+            connection.execute(
+                "INSERT INTO admin_users(username, password_hash, role, enabled, created_at, updated_at) VALUES (?, ?, 'admin', 1, ?, ?)",
+                ("existing-admin", hash_password("existing-admin-password-0123456789"), "2026-01-01", "2026-01-01"),
+            )
+        token = "existing-install-token-" + "x" * 40
+        client = TestClient(create_app(legacy, token, lambda: None,
+                                       admin_password="existing-admin-password-0123456789",
+                                       admin_username="existing-admin"))
+        status = client.get("/api/v1/setup/status", headers={"Authorization": "Bearer " + token})
+        self.assertEqual(status.status_code, 200)
+        self.assertTrue(status.json()["completed"])
+
     def test_health_is_public(self):
         response = self.client.get("/health")
         self.assertEqual(response.status_code, 200)
@@ -176,6 +208,37 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertFalse(self.client.get("/api/v1/extensions/125/provisioning", headers=self.headers).json()["enabled"])
         self.assertEqual(self.client.get("/api/v1/extensions/999/provisioning", headers=self.headers).status_code, 404)
         self.assertEqual(self.client.get("/api/v1/extensions/12/provisioning", headers=self.headers).status_code, 422)
+
+    def test_extension_protocol_is_explicit_and_sccp_does_not_return_sip_secret(self):
+        sip = self.client.post("/api/v1/extensions", headers=self.headers,
+                               json={"extension": "140", "display_name": "SIP phone"})
+        self.assertEqual(sip.status_code, 201)
+        self.assertEqual(sip.json()["protocol"], "sip")
+        self.assertIn("sip_password", sip.json())
+        sccp = self.client.post("/api/v1/extensions", headers=self.headers,
+                                json={"extension": "141", "display_name": "Cisco phone", "protocol": "sccp"})
+        self.assertEqual(sccp.status_code, 201, sccp.text)
+        self.assertEqual(sccp.json()["protocol"], "sccp")
+        self.assertNotIn("sip_password", sccp.json())
+        listed = {item["extension"]: item for item in self.client.get("/api/v1/extensions", headers=self.headers).json()}
+        self.assertEqual(listed["140"]["protocol"], "sip")
+        self.assertEqual(listed["141"]["protocol"], "sccp")
+        self.assertEqual(self.client.get("/api/v1/extensions/141/provisioning", headers=self.headers).status_code, 409)
+
+    def test_legacy_database_migrates_existing_extensions_to_sip(self):
+        import sqlite3
+        legacy = Path(self.tmp.name) / "legacy.db"
+        with sqlite3.connect(legacy) as connection:
+            connection.execute("""CREATE TABLE extensions (
+                extension TEXT PRIMARY KEY, display_name TEXT NOT NULL, password TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            )""")
+            connection.execute("INSERT INTO extensions VALUES (?, ?, ?, 1, ?, ?)",
+                               ("150", "Legacy desk", "x" * 32, "2026-01-01", "2026-01-01"))
+        initialize_database(legacy)
+        with connect(legacy) as connection:
+            row = connection.execute("SELECT protocol FROM extensions WHERE extension = '150'").fetchone()
+        self.assertEqual(row["protocol"], "sip")
 
     def test_duplicate_extension_is_rejected(self):
         payload = {"extension": "121", "display_name": "Desk"}

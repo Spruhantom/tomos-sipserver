@@ -41,6 +41,17 @@ class RenderConfigTests(unittest.TestCase):
         self.assertIn("Dial(PJSIP/101,30)", dialplan)
         self.assertIn("Dial(PJSIP/${EXTEN},30)", dialplan)
 
+    def test_routes_sccp_extensions_to_chan_sccp(self):
+        dialplan = render_config.render_dialplan([("100", "a" * 24)], ["200"])
+        self.assertIn("Dial(PJSIP/100,30)", dialplan)
+        self.assertIn("Dial(SCCP/200,30)", dialplan)
+        self.assertNotIn("Dial(PJSIP/200,30)", dialplan)
+
+    def test_keeps_legacy_dual_protocol_extensions_reachable(self):
+        dialplan = render_config.render_dialplan([("100", "a" * 24), ("200", "b" * 24)], ["200"])
+        self.assertIn("Dial(PJSIP/100,30)", dialplan)
+        self.assertIn("Dial(PJSIP/200&SCCP/200,30)", dialplan)
+
     def test_writes_config_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             render_config.atomic_write(Path(tmp) / "pjsip.conf",

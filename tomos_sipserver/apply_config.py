@@ -40,13 +40,16 @@ def apply(reload_asterisk: bool = True) -> None:
     if os.geteuid() != 0:
         raise PermissionError("Configuration helper must run as root")
     with closing(sqlite3.connect(DB_PATH)) as connection:
-        rows = connection.execute("SELECT extension, password FROM extensions WHERE enabled = 1 ORDER BY extension").fetchall()
+        rows = connection.execute(
+            "SELECT extension, password FROM extensions WHERE enabled = 1 AND protocol = 'sip' ORDER BY extension"
+        ).fetchall()
         cisco_rows = connection.execute(
             """SELECT d.mac, d.model, d.server_host, e.extension, e.display_name
                FROM cisco_devices d JOIN extensions e ON e.extension = d.extension
                WHERE e.enabled = 1 ORDER BY d.mac"""
         ).fetchall()
     extensions = [(str(number), str(password)) for number, password in rows]
+    sccp_extensions = sorted({str(row[3]) for row in cisco_rows})
     cisco_configs = {
         str(mac): (
             render_sccp_config(
@@ -72,7 +75,7 @@ def apply(reload_asterisk: bool = True) -> None:
     }
     try:
         renderer.atomic_write(paths[0], renderer.render_pjsip(extensions))
-        renderer.atomic_write(paths[1], renderer.render_dialplan(extensions))
+        renderer.atomic_write(paths[1], renderer.render_dialplan(extensions, sccp_extensions))
         renderer.atomic_write(paths[2], "".join(config for config, _ in cisco_configs.values()))
         for path in paths:
             os.chown(path, 0, asterisk_gid)
