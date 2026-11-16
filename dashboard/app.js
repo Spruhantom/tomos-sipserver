@@ -480,10 +480,10 @@ async function disconnectWebPhone(){
 }
 async function autoProvisionWebPhone(){
   if(autoPhoneAttempted||!currentUser||currentUser.role==='viewer')return;
-  autoPhoneAttempted=true;
   try{
     const assignment=await api('/me/webphone');
     if(!assignment.assigned)return;
+    autoPhoneAttempted=true;
     const select=$('#webphone-extension');
     if(![...select.options].some(option=>option.value===assignment.extension)){
       note('Your assigned browser phone extension is currently unavailable');
