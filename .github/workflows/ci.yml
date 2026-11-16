@@ -175,7 +175,7 @@ jobs:
           grep -Fq 'cdr_sqlite3_custom.so' <<<"$(asterisk -rx 'module show like cdr_sqlite3_custom')"
           test -f /var/lib/tomos-sipserver/cdr/cdr.db
           asterisk -rx 'dialplan reload'
-          asterisk -rx 'channel originate Local/900@tomos-cdr-test application Wait 1'
+          asterisk -rx 'channel originate Local/900@tomos-internal application Wait 1'
           CDR_READY=0
           for attempt in $(seq 1 15); do
             if python3 - <<'PY'
