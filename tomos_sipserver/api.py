@@ -759,7 +759,7 @@ def create_app(
         now = _utc_now()
         with connect(db_path) as connection:
             extension_row = connection.execute(
-                "SELECT enabled FROM extensions WHERE extension = ?", (payload.extension,)
+                "SELECT enabled, protocol FROM extensions WHERE extension = ?", (payload.extension,)
             ).fetchone()
             if extension_row is None:
                 raise HTTPException(status_code=404, detail="Extension not found")
@@ -856,12 +856,14 @@ def create_app(
         now = _utc_now()
         with connect(db_path) as connection:
             extension_row = connection.execute(
-                "SELECT enabled FROM extensions WHERE extension = ?", (payload.extension,)
+                "SELECT enabled, protocol FROM extensions WHERE extension = ?", (payload.extension,)
             ).fetchone()
             if extension_row is None:
                 raise HTTPException(status_code=404, detail="Extension not found")
             if not extension_row["enabled"]:
                 raise HTTPException(status_code=409, detail="Enable the SIP extension before provisioning a phone")
+            if extension_row["protocol"] != "sip":
+                raise HTTPException(status_code=409, detail="This extension uses SCCP, not SIP provisioning")
             try:
                 connection.execute(
                     """INSERT INTO yealink_devices
@@ -993,12 +995,14 @@ def create_app(
         now = _utc_now()
         with connect(db_path) as connection:
             extension_row = connection.execute(
-                "SELECT enabled FROM extensions WHERE extension = ?", (payload.extension,)
+                "SELECT enabled, protocol FROM extensions WHERE extension = ?", (payload.extension,)
             ).fetchone()
             if extension_row is None:
                 raise HTTPException(status_code=404, detail="Extension not found")
             if not extension_row["enabled"]:
                 raise HTTPException(status_code=409, detail="Enable the SIP extension before provisioning a phone")
+            if extension_row["protocol"] != "sip":
+                raise HTTPException(status_code=409, detail="This extension uses SCCP, not SIP provisioning")
             try:
                 connection.execute(
                     """INSERT INTO grandstream_devices
@@ -1183,9 +1187,12 @@ def create_app(
             raise HTTPException(status_code=422, detail="Invalid extension number")
         password = secrets.token_urlsafe(32)
         def operation(connection):
-            cursor = connection.execute("UPDATE extensions SET password = ?, updated_at = ? WHERE extension = ?", (password, _utc_now(), extension))
-            if cursor.rowcount == 0:
+            row = connection.execute("SELECT protocol FROM extensions WHERE extension = ?", (extension,)).fetchone()
+            if row is None:
                 raise HTTPException(status_code=404, detail="Extension not found")
+            if row["protocol"] != "sip":
+                raise HTTPException(status_code=409, detail="SCCP extensions do not use SIP passwords")
+            connection.execute("UPDATE extensions SET password = ?, updated_at = ? WHERE extension = ?", (password, _utc_now(), extension))
             return {"extension": extension, "sip_password": password}
         return mutate(operation)
 
