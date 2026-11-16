@@ -49,6 +49,7 @@ class RenderConfigTests(unittest.TestCase):
         self.assertIn("protocol=wss", pjsip)
         self.assertIn("[webrtc-100]", pjsip)
         self.assertIn("username=100-web", pjsip)
+        self.assertIn("identify_by=auth_username", pjsip)
         self.assertIn("media_encryption=dtls", pjsip)
         self.assertIn("dtls_auto_generate_cert=yes", pjsip)
         self.assertIn("ice_support=yes", pjsip)
