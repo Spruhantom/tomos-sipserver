@@ -754,12 +754,13 @@ def create_app(
         if payload.protocol == "sccp" and not re.fullmatch(r"^[A-Za-z0-9][A-Za-z0-9 ._()\-]{0,63}$", display_name):
             raise HTTPException(status_code=422, detail="SCCP display names must use letters, numbers, spaces, dots, underscores, parentheses or hyphens")
         password = payload.password or secrets.token_urlsafe(32)
+        webrtc_password = secrets.token_urlsafe(32) if payload.protocol == "sip" else None
         now = _utc_now()
         def operation(connection):
             try:
                 connection.execute(
-                    "INSERT INTO extensions(extension, display_name, password, protocol, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)",
-                    (payload.extension, display_name, password, payload.protocol, now, now),
+                    "INSERT INTO extensions(extension, display_name, password, webrtc_password, protocol, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
+                    (payload.extension, display_name, password, webrtc_password, payload.protocol, now, now),
                 )
             except sqlite3.IntegrityError as error:
                 raise HTTPException(status_code=409, detail="Extension already exists") from error
@@ -1175,6 +1176,46 @@ def create_app(
             "password_included": False,
         }
 
+    @app.get("/api/v1/extensions/{extension}/webrtc", tags=["WebRTC"])
+    def extension_webrtc_config(extension: str, request: Request,
+                                 principal: dict = Depends(require_token)):
+        """Return the dedicated browser SIP identity to a signed-in non-viewer."""
+        if principal["role"] == "viewer":
+            raise HTTPException(status_code=403, detail="Browser calling requires operator or administrator access")
+        if not re.fullmatch(EXTENSION_PATTERN, extension):
+            raise HTTPException(status_code=422, detail="Invalid extension number")
+        with connect(db_path) as connection:
+            row = connection.execute(
+                "SELECT extension, display_name, enabled, protocol, webrtc_password FROM extensions WHERE extension = ?",
+                (extension,),
+            ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Extension not found")
+        if row["protocol"] != "sip":
+            raise HTTPException(status_code=409, detail="Browser calling is available for SIP/PJSIP extensions only")
+        if not row["enabled"] or not row["webrtc_password"]:
+            raise HTTPException(status_code=409, detail="Enable the SIP extension before using browser calling")
+        host = request.url.hostname or "localhost"
+        sip_domain = os.environ.get("TOMOS_SIP_DOMAIN", host).strip()
+        websocket_url = os.environ.get("TOMOS_WSS_URL", f"wss://{host}:8089/ws").strip()
+        if not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", sip_domain):
+            raise HTTPException(status_code=503, detail="TOMOS_SIP_DOMAIN is not a valid DNS name")
+        if not re.fullmatch(r"wss://[A-Za-z0-9.-]+(?::[0-9]{1,5})?/ws", websocket_url):
+            raise HTTPException(status_code=503, detail="TOMOS_WSS_URL must be a secure wss:// host[:port]/ws URL")
+        payload = {
+            "extension": row["extension"],
+            "display_name": row["display_name"],
+            "websocket_url": websocket_url,
+            "sip_uri": f"sip:{extension}@{sip_domain}",
+            "authorization_username": f"{extension}-web",
+            "authorization_password": row["webrtc_password"],
+            "secure_media": True,
+            "media_encryption": "DTLS-SRTP",
+        }
+        return Response(content=json.dumps(payload), media_type="application/json",
+                        headers={"Cache-Control": "no-store, private", "Pragma": "no-cache",
+                                 "X-Content-Type-Options": "nosniff"})
+
     @app.patch("/api/v1/extensions/{extension}", dependencies=[Depends(require_token)])
     def update_extension(extension: str, payload: ExtensionUpdate):
         if not re.fullmatch(EXTENSION_PATTERN, extension):
@@ -1223,7 +1264,7 @@ def create_app(
                 raise HTTPException(status_code=404, detail="Extension not found")
             if row["protocol"] != "sip":
                 raise HTTPException(status_code=409, detail="SCCP extensions do not use SIP passwords")
-            connection.execute("UPDATE extensions SET password = ?, updated_at = ? WHERE extension = ?", (password, _utc_now(), extension))
+            connection.execute("UPDATE extensions SET password = ?, webrtc_password = ?, updated_at = ? WHERE extension = ?", (password, secrets.token_urlsafe(32), _utc_now(), extension))
             return {"extension": extension, "sip_password": password}
         return mutate(operation)
 
