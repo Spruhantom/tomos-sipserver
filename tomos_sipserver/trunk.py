@@ -46,6 +46,25 @@ def validate_trunk(trunk: Trunk) -> None:
         raise ValueError("Outbound caller ID must be an E.164 number")
 
 
+def render_trunk_transport(trunk: Trunk, ca_bundle: str = "/etc/ssl/certs/ca-certificates.crt") -> str:
+    """Render a verified outbound TLS transport for the configured provider."""
+    validate_trunk(trunk)
+    if trunk.transport != "tls":
+        return ""
+    from pathlib import Path
+    ca = Path(ca_bundle)
+    if not ca_bundle.startswith("/") or ca.is_symlink() or not ca.is_file():
+        raise ValueError("TLS requires an absolute, regular CA bundle path")
+    if any(ch in ca_bundle for ch in "\\r\\n"):
+        raise ValueError("Invalid TLS CA bundle path")
+    return "\\n".join([
+        "[transport-tls]", "type=transport", "protocol=tls",
+        "bind=0.0.0.0:0", "method=tlsv1_2",
+        "verify_server=yes", "verify_client=no",
+        f"ca_list_file={ca_bundle}", "allow_reload=yes", "",
+    ])
+
+
 def render_trunk_pjsip(trunk: Trunk) -> str:
     validate_trunk(trunk)
     if not trunk.enabled:
