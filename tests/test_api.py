@@ -270,6 +270,7 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertEqual(payload["extension"], "130")
         self.assertEqual(payload["phone"]["authorization_username"], "130-web")
         self.assertEqual(payload["phone"]["media_encryption"], "DTLS-SRTP")
+        self.assertIn("no-store", personal.headers["cache-control"])
         self.assertNotIn("password", payload["phone"])
         self.assertEqual(self.client.get("/api/v1/extensions/130/webrtc").status_code, 200)
         self.assertEqual(self.client.get("/api/v1/extensions/133/webrtc").status_code, 403)
