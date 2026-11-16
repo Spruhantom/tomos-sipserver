@@ -5,12 +5,14 @@ import json
 import tarfile
 import tempfile
 import unittest
+import sys
 from pathlib import Path
 
 SPEC = importlib.util.spec_from_file_location(
     "tomos_backup", Path(__file__).resolve().parents[1] / "scripts" / "tomos-sipserver-backup"
 )
 BACKUP = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = BACKUP
 SPEC.loader.exec_module(BACKUP)
 verify_archive = BACKUP.verify_archive
 
