@@ -28,7 +28,7 @@ jobs:
       - name: Check dashboard JavaScript syntax
         run: node --check dashboard/app.js
       - name: Compile Python operational helpers
-        run: python -m py_compile scripts/check-webrtc-endpoint.py scripts/tomos-sipserver-backup tomos_sipserver/trunk.py
+        run: python -m py_compile scripts/check-webrtc-endpoint.py scripts/tomos-sipserver-backup scripts/tomos-sipserver-trunk tomos_sipserver/trunk.py
       - name: Install API test dependencies
         run: python -m pip install -r requirements-dev.txt
       - name: Run Python tests
