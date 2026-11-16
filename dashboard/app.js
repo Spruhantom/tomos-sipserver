@@ -2,6 +2,7 @@ const $=s=>document.querySelector(s);
 let csrf='';
 let currentUser=null;
 let setupPromptChecked=false;
+let telephonySettingsLoaded=false;
 let resetUserId=null;
 let callFilters={};
 let callOffset=0;
@@ -34,11 +35,12 @@ async function checkFirstRunSetup(){
   $('#first-run-setup').hidden=false;
 }
 async function loadTelephonySettings(){
-  if(currentUser?.role!=='admin')return;
+  if(currentUser?.role!=='admin'||telephonySettingsLoaded)return;
   const settings=await api('/settings/telephony');
   $('#telephony-country').value=settings.country_code||'GB';
   if($('#setup-country'))$('#setup-country').value=settings.country_code||'GB';
   $('#telephony-settings').hidden=false;
+  telephonySettingsLoaded=true;
 }
 function cookie(n){return document.cookie.split('; ').find(x=>x.startsWith(n+'='))?.split('=').slice(1).join('=')||''}
 function secret(s){$('#secret-value').textContent=s;$('#secret-dialog').showModal()}
