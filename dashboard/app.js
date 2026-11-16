@@ -562,6 +562,7 @@ async function loadUsers(){
     const unassigned=document.createElement("option");unassigned.value="";unassigned.textContent="No phone assigned";assignment.append(unassigned);
     for(const extension of assignable){const option=document.createElement("option");option.value=extension.extension;option.textContent=extension.extension+" · "+extension.display_name;assignment.append(option)}
     assignment.value=user.assigned_extension||"";
+    assignment.disabled=user.role==='viewer';
     assignment.onchange=async()=>{try{await api("/users/"+user.id,{method:"PATCH",body:JSON.stringify({assigned_extension:assignment.value||null})});await loadUsers();note("User phone assignment updated")}catch(error){note(error.message);assignment.value=user.assigned_extension||""}};
     const role=document.createElement("select");role.setAttribute("aria-label","Role for "+user.username);
     for(const [value,label] of [["admin","Administrator"],["operator","Operator"],["viewer","Read-only viewer"]]){const option=document.createElement("option");option.value=value;option.textContent=label;role.append(option)}
