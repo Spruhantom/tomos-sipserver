@@ -10,6 +10,13 @@ from tomos_sipserver.trunk_store import (
 
 
 class TrunkStoreTests(unittest.TestCase):
+    def setUp(self):
+        self.root_patch = patch("tomos_sipserver.trunk_store.os.geteuid", return_value=0)
+        self.root_patch.start()
+
+    def tearDown(self):
+        self.root_patch.stop()
+
     def test_configure_persists_root_only_disabled_trunk(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "etc" / "trunk.json"
