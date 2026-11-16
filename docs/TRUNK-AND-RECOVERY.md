@@ -22,3 +22,20 @@ This first stage does not activate external routing or expose trunk credentials 
 ## Validation boundary
 
 CI can validate Python logic, generated configuration and archive integrity. It cannot validate a real provider's registration, caller-ID acceptance, inbound DID delivery, NAT/media path, billing or emergency-service handling. Those require a test account and a controlled deployment.
+
+
+## Root-only trunk credential storage (foundation)
+
+The current development branch also includes `tomos_sipserver.trunk_store`.
+It stores a validated provider hostname, account name, secret, port, transport
+and optional E.164 caller ID in `/etc/tomos-sipserver/trunk.json` using an
+atomic replacement, root-only access and mode 0600. Secret rotation replaces
+the stored secret without exposing it through the status summary. The status
+view intentionally omits the secret.
+
+**Important:** saving or rotating credentials always writes the trunk as
+disabled. This storage layer does not yet activate provider registration,
+outbound routes or inbound DID handling. The live apply path still needs
+provider transport definitions, certificate validation for TLS, provider
+interop tests and a reviewed emergency-call policy before activation can be
+implemented. Existing internal calling is unchanged.
