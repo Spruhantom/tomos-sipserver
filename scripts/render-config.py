@@ -114,10 +114,6 @@ def render_dialplan(extensions: list[tuple[str, str]],
             f"exten => {number},1,NoOp(TomOS internal call to {number})",
             f" same => n,Dial({technology},30)", " same => n,Hangup()",
         ])
-    lines.extend([
-        "exten => _1XX,1,NoOp(TomOS three-digit internal extension)",
-        " same => n,Dial(PJSIP/${EXTEN},30)", " same => n,Hangup()", "",
-    ])
     if country_code == "GB":
         lines.extend([
             "[tomos-country-outbound]",
